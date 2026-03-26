@@ -164,10 +164,12 @@
   <div class="card hidden" id="results-card">
     <div class="stats" id="stats"></div>
     <div class="tabs" id="result-tabs"></div>
+    <div id="pane-overview" class="hidden"></div>
     <div id="pane-reviews"></div>
     <div id="pane-photos" class="hidden"></div>
     <div id="pane-posts" class="hidden"></div>
     <div id="pane-captions" class="hidden"></div>
+    <div id="pane-webresearch" class="hidden"></div>
     <div class="dl-btns" id="dl-btns"></div>
     <button class="btn btn-outline" style="margin-top:8px;width:100%;" onclick="reset()">Scrape another</button>
   </div>
@@ -481,10 +483,32 @@ function renderAll(combined) {
   `;
 
   document.getElementById('result-tabs').innerHTML = `
-    <button class="tab active" onclick="switchTab('posts',this)">Reviews (${reviews.length})</button>
+    <button class="tab active" onclick="switchTab('overview',this)">Overview</button>
+    <button class="tab" onclick="switchTab('posts',this)">Reviews (${reviews.length})</button>
     <button class="tab" onclick="switchTab('photos',this)">Photos (${photos.length})</button>
     <button class="tab" onclick="switchTab('captions',this)">IG Captions (${captions.length})</button>
+    <button class="tab" onclick="switchTab('webresearch',this)">Web Research</button>
   `;
+
+  // Overview
+  const gmaps = combined.gmaps || {};
+  const research = combined.research || {};
+  let overviewHtml = '<div style="font-size:14px;line-height:2;">';
+  if (gmaps.title) overviewHtml += `<p><strong>Name:</strong> ${gmaps.title}</p>`;
+  if (gmaps.address) overviewHtml += `<p><strong>Address:</strong> ${gmaps.address}</p>`;
+  if (gmaps.phone) overviewHtml += `<p><strong>Phone:</strong> ${gmaps.phone}</p>`;
+  if (gmaps.totalScore) overviewHtml += `<p><strong>Rating:</strong> ${gmaps.totalScore} ⭐ (${gmaps.reviewsCount||0} reviews)</p>`;
+  if (gmaps.categoryName) overviewHtml += `<p><strong>Category:</strong> ${gmaps.categoryName}</p>`;
+  if (gmaps.website) overviewHtml += `<p><strong>Website:</strong> <a href="${gmaps.website}" target="_blank" style="color:#1a56db">${gmaps.website}</a></p>`;
+  if (research.instagram) overviewHtml += `<p><strong>Instagram:</strong> <a href="${research.instagram}" target="_blank" style="color:#1a56db">${research.instagram}</a></p>`;
+  if (gmaps.description) overviewHtml += `<p><strong>Description:</strong> ${gmaps.description}</p>`;
+  if (gmaps.openingHours && gmaps.openingHours.length) {
+    overviewHtml += `<p><strong>Hours:</strong></p><ul style="margin-left:16px;font-size:13px;">`;
+    gmaps.openingHours.forEach(h => overviewHtml += `<li>${h.day}: ${h.hours}</li>`);
+    overviewHtml += '</ul>';
+  }
+  overviewHtml += '</div>';
+  document.getElementById('pane-overview').innerHTML = overviewHtml;
 
   // Reviews
   document.getElementById('pane-posts').innerHTML = reviews.length === 0
@@ -501,6 +525,31 @@ function renderAll(combined) {
   document.getElementById('pane-captions').innerHTML = captions.length === 0
     ? '<p style="color:#999;font-size:13px">No captions.</p>'
     : captions.map((p,i)=>`<div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;"><div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.timestamp?new Date(p.timestamp).toLocaleDateString():''}</div><div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.caption}</div></div>`).join('');
+
+  // Web Research
+  let researchHtml = '<div style="font-size:13px;line-height:1.8;">';
+  if (gmaps.websiteUrl) {
+    researchHtml += `<p style="font-weight:600;margin-bottom:4px;">Website from Maps profile: <a href="${gmaps.websiteUrl}" target="_blank" style="color:#1a56db">${gmaps.websiteUrl}</a></p>`;
+    if (gmaps.websiteCopy) researchHtml += `<pre style="white-space:pre-wrap;background:#f9f9f5;padding:12px;border-radius:8px;font-size:12px;margin-bottom:16px;">${gmaps.websiteCopy}</pre>`;
+  }
+  if (research.website && research.website !== gmaps.websiteUrl) {
+    researchHtml += `<p style="font-weight:600;margin-bottom:4px;">Website from Google Search: <a href="${research.website}" target="_blank" style="color:#1a56db">${research.website}</a></p>`;
+    if (research.websiteCopy) researchHtml += `<pre style="white-space:pre-wrap;background:#f9f9f5;padding:12px;border-radius:8px;font-size:12px;margin-bottom:16px;">${research.websiteCopy}</pre>`;
+  }
+  if (research.sources && research.sources.length) {
+    researchHtml += `<p style="font-weight:600;margin:12px 0 8px;">Google Search Results:</p>`;
+    research.sources.forEach((s,i) => {
+      researchHtml += `<div style="margin-bottom:10px;padding:10px;border:1px solid #eee;border-radius:6px;">
+        <a href="${s.url}" target="_blank" style="color:#1a56db;font-weight:500;">${s.title}</a>
+        <p style="color:#666;font-size:12px;margin-top:3px;">${s.description||''}</p>
+      </div>`;
+    });
+  }
+  if (!gmaps.websiteCopy && !research.websiteCopy && (!research.sources || !research.sources.length)) {
+    researchHtml += '<p style="color:#999;">No web research data found.</p>';
+  }
+  researchHtml += '</div>';
+  document.getElementById('pane-webresearch').innerHTML = researchHtml;
 
   document.getElementById('dl-btns').innerHTML = `
     <button class="btn btn-outline" onclick="dlAllJSON()">Download full brief</button>
@@ -791,7 +840,7 @@ function renderInstagram(posts) {
 function switchTab(name, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  ['reviews','photos','posts','captions'].forEach(p => {
+  ['overview','reviews','photos','posts','captions','webresearch'].forEach(p => {
     document.getElementById('pane-' + p).classList.toggle('hidden', p !== name);
   });
 }

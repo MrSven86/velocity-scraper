@@ -88,7 +88,7 @@
       <label>Google Maps URL</label>
       <input type="text" id="all-gmaps" placeholder="https://maps.google.com/..." />
       <label>Instagram handle</label>
-      <input type="text" id="all-ig" placeholder="lapelu.belgrano" />
+      <input type="text" id="all-ig" placeholder="https://www.instagram.com/lapelu.belgrano/ or just lapelu.belgrano" />
       <label>Business name + city</label>
       <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires" />
       <div class="row">
@@ -376,7 +376,8 @@ async function startScrape() {
 
 async function scrapeAll(token) {
   const gmapsUrl = document.getElementById('all-gmaps').value.trim();
-  const igHandle = document.getElementById('all-ig').value.trim().replace('@','').replace('https://www.instagram.com/','').replace(/\/$/,'');
+  const igRaw = document.getElementById('all-ig').value.trim();
+  const igHandle = igRaw.replace('https://www.instagram.com/','').replace('http://www.instagram.com/','').replace('@','').replace(/\/.*$/,'').trim();
   const bizName = document.getElementById('all-name').value.trim();
   const maxReviews = parseInt(document.getElementById('all-maxReviews').value);
   const maxPosts = parseInt(document.getElementById('all-maxPosts').value);

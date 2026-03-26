@@ -66,10 +66,10 @@
 
   <div class="card" id="setup-card">
     <div class="mode-tabs">
-      <button class="mode-btn" id="mode-all" onclick="setMode('all')" style="border-color:#1a1a1a;color:#1a1a1a;font-weight:700;">
+      <button class="mode-btn active" id="mode-all" onclick="setMode('all')" style="font-weight:700;">
         <span class="icon">⚡</span>Scrape All
       </button>
-      <button class="mode-btn active" id="mode-gmaps" onclick="setMode('gmaps')">
+      <button class="mode-btn" id="mode-gmaps" onclick="setMode('gmaps')">
         <span class="icon">🗺️</span>Google Maps
       </button>
       <button class="mode-btn" id="mode-ig" onclick="setMode('ig')">
@@ -83,7 +83,7 @@
     <label>Apify API token</label>
     <input type="password" id="token" placeholder="apify_api_xxxx..." />
 
-    <div id="all-fields" class="hidden">
+    <div id="all-fields">
       <div class="tip">Fill in all three — scraper runs everything at the same time. Done in ~2 minutes.</div>
       <label>Google Maps URL</label>
       <input type="text" id="all-gmaps" placeholder="https://maps.google.com/..." />
@@ -109,7 +109,7 @@
       </div>
     </div>
 
-    <div id="gmaps-fields">
+    <div id="gmaps-fields" class="hidden">
       <label>Google Maps URL or business name</label>
       <input type="text" id="gmaps-query" placeholder="https://maps.google.com/... or La pelu Belgrano Buenos Aires" />
       <div class="row">
@@ -177,7 +177,7 @@
 
 <script>
 let data = null;
-let currentMode = 'gmaps';
+let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;

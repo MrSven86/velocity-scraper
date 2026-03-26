@@ -470,7 +470,7 @@ function renderAll(combined) {
   const photos = combined.gmaps?.imageUrls || [];
   const posts = combined.ig || [];
   const captions = posts.filter(p => p.caption);
-  const research = combined.research;
+  const researchData = combined.research;
 
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="stat-num">${reviews.length}</div><div class="stat-label">reviews</div></div>
@@ -488,7 +488,7 @@ function renderAll(combined) {
 
   // Overview
   const gmaps = combined.gmaps || {};
-  const research = combined.research || {};
+  const research = researchData || {};
   let overviewHtml = '<div style="font-size:14px;line-height:2;">';
   if (gmaps.title) overviewHtml += `<p><strong>Name:</strong> ${gmaps.title}</p>`;
   if (gmaps.address) overviewHtml += `<p><strong>Address:</strong> ${gmaps.address}</p>`;

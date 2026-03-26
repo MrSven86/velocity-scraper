@@ -66,6 +66,9 @@
 
   <div class="card" id="setup-card">
     <div class="mode-tabs">
+      <button class="mode-btn" id="mode-all" onclick="setMode('all')" style="border-color:#1a1a1a;color:#1a1a1a;font-weight:700;">
+        <span class="icon">⚡</span>Scrape All
+      </button>
       <button class="mode-btn active" id="mode-gmaps" onclick="setMode('gmaps')">
         <span class="icon">🗺️</span>Google Maps
       </button>
@@ -79,6 +82,32 @@
 
     <label>Apify API token</label>
     <input type="password" id="token" placeholder="apify_api_xxxx..." />
+
+    <div id="all-fields" class="hidden">
+      <div class="tip">Fill in all three — scraper runs everything at the same time. Done in ~2 minutes.</div>
+      <label>Google Maps URL</label>
+      <input type="text" id="all-gmaps" placeholder="https://maps.google.com/..." />
+      <label>Instagram handle</label>
+      <input type="text" id="all-ig" placeholder="lapelu.belgrano" />
+      <label>Business name + city</label>
+      <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires" />
+      <div class="row">
+        <div>
+          <label>Max reviews</label>
+          <select id="all-maxReviews">
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+        <div>
+          <label>Max posts</label>
+          <select id="all-maxPosts">
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+          </select>
+        </div>
+      </div>
+    </div>
 
     <div id="gmaps-fields">
       <label>Google Maps URL or business name</label>
@@ -150,9 +179,11 @@ let currentMode = 'gmaps';
 
 function setMode(mode) {
   currentMode = mode;
+  document.getElementById('all-fields').classList.toggle('hidden', mode !== 'all');
   document.getElementById('gmaps-fields').classList.toggle('hidden', mode !== 'gmaps');
   document.getElementById('ig-fields').classList.toggle('hidden', mode !== 'ig');
   document.getElementById('research-fields').classList.toggle('hidden', mode !== 'research');
+  document.getElementById('mode-all').classList.toggle('active', mode === 'all');
   document.getElementById('mode-gmaps').classList.toggle('active', mode === 'gmaps');
   document.getElementById('mode-ig').classList.toggle('active', mode === 'ig');
   document.getElementById('mode-research').classList.toggle('active', mode === 'research');
@@ -329,7 +360,9 @@ async function startScrape() {
   setProgress(5);
 
   try {
-    if (currentMode === 'gmaps') {
+    if (currentMode === 'all') {
+      await scrapeAll(token);
+    } else if (currentMode === 'gmaps') {
       await scrapeGmaps(token);
     } else if (currentMode === 'ig') {
       await scrapeInstagram(token);
@@ -341,6 +374,161 @@ async function startScrape() {
     btn.disabled = false;
     btn.innerHTML = 'Start scraping';
   }
+}
+
+async function scrapeAll(token) {
+  const gmapsUrl = document.getElementById('all-gmaps').value.trim();
+  const igHandle = document.getElementById('all-ig').value.trim().replace('@','').replace('https://www.instagram.com/','').replace(/\/$/,'');
+  const bizName = document.getElementById('all-name').value.trim();
+  const maxReviews = parseInt(document.getElementById('all-maxReviews').value);
+  const maxPosts = parseInt(document.getElementById('all-maxPosts').value);
+
+  if (!gmapsUrl && !igHandle && !bizName) throw new Error('Fill in at least one field');
+
+  setStatus('Starting all scrapers in parallel...', 'info');
+
+  // Start all three simultaneously
+  const promises = [];
+  if (gmapsUrl) {
+    promises.push(startActor(token, 'compass~crawler-google-places', {
+      startUrls: [{ url: gmapsUrl }],
+      maxReviews, maxImages: 20,
+      reviewsSort: 'newest', language: 'en', scrapeReviewerInfo: true,
+    }).then(runId => pollRun(token, runId)).then(r => ({ type: 'gmaps', data: r[0] })).catch(e => ({ type: 'gmaps', error: e.message })));
+  }
+
+  if (igHandle) {
+    promises.push(startActor(token, 'apify~instagram-post-scraper', {
+      username: [igHandle], resultsLimit: maxPosts,
+    }).then(runId => pollRun(token, runId)).then(r => ({ type: 'ig', data: r })).catch(e => ({ type: 'ig', error: e.message })));
+  }
+
+  if (bizName) {
+    const parts = bizName.split(',');
+    const name = parts[0].trim();
+    const city = parts.slice(1).join(',').trim();
+    promises.push(startActor(token, 'apify~google-search-scraper', {
+      queries: [bizName, bizName + ' Instagram', bizName + ' sitio web'].join('\n'),
+      resultsPerPage: 5, maxPagesPerQuery: 1, languageCode: 'es', countryCode: 'ar',
+    }).then(runId => pollRun(token, runId)).then(async (results) => {
+      const allResults = [];
+      for (const page of results) {
+        if (page.organicResults) allResults.push(...page.organicResults.map(r => ({ title: r.title, url: r.url, description: r.description })));
+      }
+      const brief = { name, city, sources: allResults };
+      const igResult = allResults.find(r => r.url && r.url.includes('instagram.com'));
+      if (igResult) { const m = igResult.url.match(/instagram\.com\/([^/?]+)/); if (m) brief.instagram = 'https://www.instagram.com/' + m[1] + '/'; }
+      const skipDomains = ['instagram.com','facebook.com','google.com','yelp.com','tripadvisor','maps.','youtube.com'];
+      const website = allResults.find(r => r.url && !skipDomains.some(d => r.url.includes(d)));
+      if (website) {
+        brief.website = website.url;
+        try {
+          const resp = await fetch('/api/proxy?url=' + encodeURIComponent(website.url));
+          const html = await resp.text();
+          const div = document.createElement('div');
+          div.innerHTML = html;
+          div.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
+          brief.websiteCopy = (div.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 5000);
+        } catch(e) {}
+      }
+      return { type: 'research', data: brief };
+    }).catch(e => ({ type: 'research', error: e.message })));
+  }
+
+  setStatus('All scrapers running in parallel... (~2 min)', 'info');
+  const results = await Promise.all(promises);
+
+  const combined = { mode: 'all' };
+  for (const r of results) {
+    if (r.type === 'gmaps' && !r.error) combined.gmaps = r.data;
+    if (r.type === 'ig' && !r.error) combined.ig = r.data;
+    if (r.type === 'research' && !r.error) combined.research = r.data;
+  }
+
+  data = combined;
+  renderAll(combined);
+}
+
+function renderAll(combined) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  const reviews = combined.gmaps?.reviews || [];
+  const photos = combined.gmaps?.imageUrls || [];
+  const posts = combined.ig || [];
+  const captions = posts.filter(p => p.caption);
+  const research = combined.research;
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-num">${reviews.length}</div><div class="stat-label">reviews</div></div>
+    <div class="stat"><div class="stat-num">${posts.length}</div><div class="stat-label">IG posts</div></div>
+    <div class="stat"><div class="stat-num">${photos.length + posts.filter(p=>p.displayUrl).length}</div><div class="stat-label">photos/videos</div></div>
+  `;
+
+  document.getElementById('result-tabs').innerHTML = `
+    <button class="tab active" onclick="switchTab('posts',this)">Reviews (${reviews.length})</button>
+    <button class="tab" onclick="switchTab('photos',this)">Photos (${photos.length})</button>
+    <button class="tab" onclick="switchTab('captions',this)">IG Captions (${captions.length})</button>
+  `;
+
+  // Reviews
+  document.getElementById('pane-posts').innerHTML = reviews.length === 0
+    ? '<p style="color:#999;font-size:13px">No reviews.</p>'
+    : reviews.map(r => `<div class="review"><div class="rev-header"><span class="rev-name">${r.name||'Anonymous'}</span><span class="rev-stars">${'★'.repeat(r.stars||0)}${'☆'.repeat(5-(r.stars||0))}</span></div><div class="rev-text">${r.text||r.reviewOriginText||'(no text)'}</div><div class="rev-date">${r.publishedAtDate?new Date(r.publishedAtDate).toLocaleDateString():''}</div></div>`).join('');
+
+  // Photos (Maps + IG combined)
+  const allPhotos = [...photos, ...posts.filter(p=>p.displayUrl).map(p=>p.displayUrl)];
+  document.getElementById('pane-photos').innerHTML = allPhotos.length === 0
+    ? '<p style="color:#999;font-size:13px">No photos.</p>'
+    : `<div class="photo-grid">${allPhotos.map((url,i)=>`<img src="${url}" onclick="window.open('${url}','_blank')" onerror="this.style.display='none'" />`).join('')}</div>`;
+
+  // Captions
+  document.getElementById('pane-captions').innerHTML = captions.length === 0
+    ? '<p style="color:#999;font-size:13px">No captions.</p>'
+    : captions.map((p,i)=>`<div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;"><div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.timestamp?new Date(p.timestamp).toLocaleDateString():''}</div><div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.caption}</div></div>`).join('');
+
+  document.getElementById('dl-btns').innerHTML = `
+    <button class="btn btn-outline" onclick="dlAllJSON()">Download full brief</button>
+    <button class="btn btn-outline" onclick="dlAllPhotos()">Save all photos</button>
+    <button class="btn btn-outline" onclick="dlAllCaptions()">Captions .txt</button>
+  `;
+}
+
+function dlAllJSON() {
+  if (!data) return;
+  triggerDownload(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'}), 'full-brief.json');
+}
+
+function dlAllCaptions() {
+  if (!data) return;
+  const posts = data.ig || [];
+  const lines = posts.filter(p=>p.caption).map((p,i)=>`--- Post ${i+1} ---\n${p.caption}\n`).join('\n');
+  triggerDownload(new Blob([lines], {type:'text/plain'}), 'captions.txt');
+}
+
+async function dlAllPhotos() {
+  if (!data) return;
+  const gmapsPhotos = data.gmaps?.imageUrls || [];
+  const igPhotos = (data.ig || []).filter(p => p.displayUrl || p.videoUrl);
+  let saved = 0;
+  for (let i = 0; i < gmapsPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(gmapsPhotos[i]);
+      triggerDownload(blob, `gmaps-${String(i+1).padStart(2,'0')}.jpg`);
+      saved++; await sleep(400);
+    } catch(e) {}
+  }
+  for (let i = 0; i < igPhotos.length; i++) {
+    try {
+      const p = igPhotos[i];
+      const url = p.type === 'Video' ? (p.videoUrl || p.displayUrl) : p.displayUrl;
+      const blob = await proxyFetch(url);
+      const ext = p.type === 'Video' ? 'mp4' : 'jpg';
+      triggerDownload(blob, `ig-${String(i+1).padStart(2,'0')}.${ext}`);
+      saved++; await sleep(400);
+    } catch(e) {}
+  }
+  alert('Downloaded ' + saved + ' files!');
 }
 
 async function scrapeGmaps(token) {

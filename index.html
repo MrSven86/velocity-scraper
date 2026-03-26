@@ -181,14 +181,10 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  document.getElementById('all-fields').classList.toggle('hidden', mode !== 'all');
-  document.getElementById('gmaps-fields').classList.toggle('hidden', mode !== 'gmaps');
-  document.getElementById('ig-fields').classList.toggle('hidden', mode !== 'ig');
-  document.getElementById('research-fields').classList.toggle('hidden', mode !== 'research');
-  document.getElementById('mode-all').classList.toggle('active', mode === 'all');
-  document.getElementById('mode-gmaps').classList.toggle('active', mode === 'gmaps');
-  document.getElementById('mode-ig').classList.toggle('active', mode === 'ig');
-  document.getElementById('mode-research').classList.toggle('active', mode === 'research');
+  ['all','gmaps','ig','research'].forEach(m => {
+    document.getElementById(m + '-fields').classList.toggle('hidden', m !== mode);
+    document.getElementById('mode-' + m).classList.toggle('active', m === mode);
+  });
 }
 
 function setStatus(msg, type) {

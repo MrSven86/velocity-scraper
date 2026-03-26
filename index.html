@@ -109,8 +109,9 @@
       <label>Max posts to scrape</label>
       <select id="maxPosts">
         <option value="12">12 posts</option>
-        <option value="24" selected>24 posts</option>
-        <option value="50">50 posts</option>
+        <option value="24">24 posts</option>
+        <option value="50" selected>50 posts</option>
+        <option value="100">100 posts</option>
       </select>
     </div>
 
@@ -429,25 +430,31 @@ async function dlPhotos() {
   }
 }
 
+async function proxyFetch(url) {
+  const resp = await fetch('/api/proxy?url=' + encodeURIComponent(url));
+  if (!resp.ok) throw new Error('proxy failed ' + resp.status);
+  return await resp.blob();
+}
+
 async function dlIgPhotos() {
   if (!data || data.mode !== 'ig') return;
-  const photoPosts = data.posts.filter(p => p.displayUrl && p.type !== 'Video');
-  if (!photoPosts.length) { alert('No photos found.'); return; }
+  const allMedia = data.posts.filter(p => p.displayUrl || p.videoUrl);
+  if (!allMedia.length) { alert('No media found.'); return; }
   let saved = 0;
-  for (let i = 0; i < photoPosts.length; i++) {
+  for (let i = 0; i < allMedia.length; i++) {
+    const post = allMedia[i];
+    const isVideo = post.type === 'Video';
+    const url = isVideo ? (post.videoUrl || post.displayUrl) : post.displayUrl;
+    if (!url) continue;
     try {
-      const url = photoPosts[i].displayUrl;
-      const resp = await fetch(url);
-      if (!resp.ok) { console.warn('skip', i+1); continue; }
-      const blob = await resp.blob();
-      if (!blob.type.startsWith('image/')) { console.warn('not image', i+1); continue; }
-      const ext = blob.type.includes('png') ? 'png' : 'jpg';
-      triggerDownload(blob, `ig-photo-${String(i+1).padStart(2,'0')}.${ext}`);
+      const blob = await proxyFetch(url);
+      const ext = isVideo ? 'mp4' : (blob.type.includes('png') ? 'png' : 'jpg');
+      triggerDownload(blob, `ig-${String(i+1).padStart(2,'0')}.${ext}`);
       saved++;
-      await sleep(500);
-    } catch(e) { console.warn('ig photo error', i+1, e); }
+      await sleep(600);
+    } catch(e) { console.warn('media error', i+1, e); }
   }
-  alert('Done! Downloaded ' + saved + ' of ' + photoPosts.length + ' photos.');
+  alert('Done! Downloaded ' + saved + ' of ' + allMedia.length + ' files.');
 }
 
 function triggerDownload(blob, filename) {

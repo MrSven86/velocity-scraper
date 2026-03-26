@@ -72,6 +72,9 @@
       <button class="mode-btn" id="mode-ig" onclick="setMode('ig')">
         <span class="icon">📸</span>Instagram
       </button>
+      <button class="mode-btn" id="mode-research" onclick="setMode('research')">
+        <span class="icon">🔍</span>Research
+      </button>
     </div>
 
     <label>Apify API token</label>
@@ -115,6 +118,14 @@
       </select>
     </div>
 
+    <div id="research-fields" class="hidden">
+      <div class="tip">Enter a business name and city. The scraper will Google it, find their website, Maps listing, Instagram, and pull all copy.</div>
+      <label>Business name</label>
+      <input type="text" id="research-name" placeholder="La pelu Belgrano" />
+      <label>City / Country</label>
+      <input type="text" id="research-city" placeholder="Buenos Aires, Argentina" />
+    </div>
+
     <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
@@ -141,8 +152,10 @@ function setMode(mode) {
   currentMode = mode;
   document.getElementById('gmaps-fields').classList.toggle('hidden', mode !== 'gmaps');
   document.getElementById('ig-fields').classList.toggle('hidden', mode !== 'ig');
+  document.getElementById('research-fields').classList.toggle('hidden', mode !== 'research');
   document.getElementById('mode-gmaps').classList.toggle('active', mode === 'gmaps');
   document.getElementById('mode-ig').classList.toggle('active', mode === 'ig');
+  document.getElementById('mode-research').classList.toggle('active', mode === 'research');
 }
 
 function setStatus(msg, type) {
@@ -157,6 +170,155 @@ function setProgress(pct) {
   document.getElementById('progress-bar').style.width = pct + '%';
 }
 
+async function scrapeResearch(token) {
+  const name = document.getElementById('research-name').value.trim();
+  const city = document.getElementById('research-city').value.trim();
+  if (!name) throw new Error('Please enter a business name');
+
+  const query = city ? `${name} ${city}` : name;
+  setStatus('Searching Google for: ' + query, 'info');
+
+  // Run Google search scraper
+  const searches = [
+    query,
+    `${query} Instagram`,
+    `${query} sitio web`,
+  ];
+
+  const input = {
+    queries: searches.join('\n'),
+    resultsPerPage: 5,
+    maxPagesPerQuery: 1,
+    languageCode: 'es',
+    countryCode: 'ar',
+  };
+
+  const runId = await startActor(token, 'apify~google-search-scraper', input);
+  const results = await pollRun(token, runId);
+
+  // Parse results
+  const brief = { name, city, query, sources: [] };
+  const allResults = [];
+
+  for (const page of results) {
+    if (page.organicResults) {
+      for (const r of page.organicResults) {
+        allResults.push({ title: r.title, url: r.url, description: r.description });
+      }
+    }
+  }
+
+  brief.sources = allResults;
+
+  // Find Instagram
+  const igResult = allResults.find(r => r.url && r.url.includes('instagram.com'));
+  if (igResult) {
+    const match = igResult.url.match(/instagram\.com\/([^/?]+)/);
+    if (match) brief.instagram = 'https://www.instagram.com/' + match[1] + '/';
+  }
+
+  // Find Google Maps
+  const mapsResult = allResults.find(r => r.url && (r.url.includes('maps.google') || r.url.includes('google.com/maps')));
+  if (mapsResult) brief.googleMaps = mapsResult.url;
+
+  // Find website (not social, not maps, not directory)
+  const skipDomains = ['instagram.com','facebook.com','google.com','yelp.com','tripadvisor','maps.','youtube.com'];
+  const website = allResults.find(r => r.url && !skipDomains.some(d => r.url.includes(d)));
+  if (website) brief.website = website.url;
+
+  // Now fetch website copy if found
+  if (brief.website) {
+    setStatus('Found website: ' + brief.website + ' — fetching copy...', 'info');
+    try {
+      const proxyResp = await fetch('/api/proxy?url=' + encodeURIComponent(brief.website));
+      const html = await proxyResp.text();
+      // Extract text from HTML
+      const div = document.createElement('div');
+      div.innerHTML = html;
+      // Remove scripts and styles
+      div.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
+      const text = div.innerText || div.textContent || '';
+      // Clean up whitespace
+      brief.websiteCopy = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
+    } catch(e) {
+      brief.websiteCopyError = 'Could not fetch website: ' + e.message;
+    }
+  }
+
+  data = { mode: 'research', brief };
+  renderResearch(brief);
+}
+
+function renderResearch(brief) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-num">${brief.sources.length}</div><div class="stat-label">results found</div></div>
+    <div class="stat"><div class="stat-num">${brief.instagram ? '✓' : '—'}</div><div class="stat-label">Instagram</div></div>
+    <div class="stat"><div class="stat-num">${brief.website ? '✓' : '—'}</div><div class="stat-label">Website</div></div>
+  `;
+
+  document.getElementById('result-tabs').innerHTML = `
+    <button class="tab active" onclick="switchTab('posts',this)">Overview</button>
+    <button class="tab" onclick="switchTab('captions',this)">Website copy</button>
+  `;
+
+  let overview = `<div style="font-size:13px;line-height:1.8;">`;
+  if (brief.website) overview += `<p><strong>Website:</strong> <a href="${brief.website}" target="_blank" style="color:#1a56db">${brief.website}</a></p>`;
+  if (brief.instagram) overview += `<p><strong>Instagram:</strong> <a href="${brief.instagram}" target="_blank" style="color:#1a56db">${brief.instagram}</a></p>`;
+  if (brief.googleMaps) overview += `<p><strong>Google Maps:</strong> <a href="${brief.googleMaps}" target="_blank" style="color:#1a56db">View on Maps</a></p>`;
+  overview += `<hr style="margin:12px 0;border-color:#eee;"><p style="font-weight:600;margin-bottom:8px;">All search results:</p>`;
+  for (const s of brief.sources) {
+    overview += `<div style="margin-bottom:10px;padding:10px;border:1px solid #eee;border-radius:6px;">
+      <a href="${s.url}" target="_blank" style="color:#1a56db;font-weight:500;font-size:13px;">${s.title}</a>
+      <p style="color:#666;font-size:12px;margin-top:3px;">${s.description || ''}</p>
+    </div>`;
+  }
+  overview += '</div>';
+  document.getElementById('pane-posts').innerHTML = overview;
+
+  const copy = brief.websiteCopy || brief.websiteCopyError || 'No website found to extract copy from.';
+  document.getElementById('pane-captions').innerHTML = `
+    <div style="margin-bottom:10px;">
+      <button class="btn btn-outline" style="width:auto;padding:8px 16px;" onclick="dlResearchJSON()">Download full brief JSON</button>
+    </div>
+    <pre style="font-size:12px;color:#333;line-height:1.7;white-space:pre-wrap;background:#f9f9f5;padding:16px;border-radius:8px;">${copy}</pre>
+  `;
+
+  document.getElementById('dl-btns').innerHTML = `
+    <button class="btn btn-outline" onclick="dlResearchJSON()">Download brief JSON</button>
+    <button class="btn btn-outline" onclick="copyBrief()">Copy brief</button>
+    <button class="btn btn-outline" onclick="sendToBuilder()">Send to builder ↗</button>
+  `;
+}
+
+function dlResearchJSON() {
+  if (!data) return;
+  const blob = new Blob([JSON.stringify(data.brief, null, 2)], {type:'application/json'});
+  triggerDownload(blob, 'business-brief.json');
+}
+
+function copyBrief() {
+  if (!data) return;
+  const b = data.brief;
+  const text = [
+    'BUSINESS: ' + b.name,
+    'CITY: ' + b.city,
+    b.website ? 'WEBSITE: ' + b.website : '',
+    b.instagram ? 'INSTAGRAM: ' + b.instagram : '',
+    b.googleMaps ? 'GOOGLE MAPS: ' + b.googleMaps : '',
+    '',
+    'WEBSITE COPY:',
+    b.websiteCopy || '(none found)',
+  ].filter(Boolean).join('\n');
+  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
+}
+
+function sendToBuilder() {
+  alert('Coming soon — will auto-trigger the Builder with this brief.');
+}
+
 async function startScrape() {
   const token = document.getElementById('token').value.trim();
   if (!token) { setStatus('Please enter your Apify API token', 'error'); return; }
@@ -169,8 +331,10 @@ async function startScrape() {
   try {
     if (currentMode === 'gmaps') {
       await scrapeGmaps(token);
-    } else {
+    } else if (currentMode === 'ig') {
       await scrapeInstagram(token);
+    } else {
+      await scrapeResearch(token);
     }
   } catch(e) {
     setStatus('Error: ' + e.message, 'error');

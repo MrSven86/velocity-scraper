@@ -211,14 +211,14 @@ async function scrapeInstagram(token) {
 
   setStatus('Starting Instagram scraper... 1–4 minutes', 'info');
 
+  const username = query.replace('https://www.instagram.com/', '').replace('http://www.instagram.com/', '').replace(/\/$/, '').replace('@', '');
+
   const input = {
-    directUrls: [query],
-    resultsType: 'posts',
+    username: [username],
     resultsLimit: maxPosts,
-    addParentData: false,
   };
 
-  const runId = await startActor(token, 'apify/instagram-scraper', input);
+  const runId = await startActor(token, 'apify~instagram-post-scraper', input);
   const result = await pollRun(token, runId);
   data = { mode: 'ig', posts: result };
   renderInstagram(result);

@@ -431,18 +431,23 @@ async function dlPhotos() {
 
 async function dlIgPhotos() {
   if (!data || data.mode !== 'ig') return;
-  const posts = data.posts.filter(p => p.displayUrl);
-  if (!posts.length) { alert('No photos found.'); return; }
-  for (let i = 0; i < posts.length; i++) {
+  const photoPosts = data.posts.filter(p => p.displayUrl && p.type !== 'Video');
+  if (!photoPosts.length) { alert('No photos found.'); return; }
+  let saved = 0;
+  for (let i = 0; i < photoPosts.length; i++) {
     try {
-      const url = posts[i].displayUrl;
+      const url = photoPosts[i].displayUrl;
       const resp = await fetch(url);
+      if (!resp.ok) { console.warn('skip', i+1); continue; }
       const blob = await resp.blob();
+      if (!blob.type.startsWith('image/')) { console.warn('not image', i+1); continue; }
       const ext = blob.type.includes('png') ? 'png' : 'jpg';
       triggerDownload(blob, `ig-photo-${String(i+1).padStart(2,'0')}.${ext}`);
-      await sleep(400);
-    } catch(e) { console.warn('ig photo', i+1, e); }
+      saved++;
+      await sleep(500);
+    } catch(e) { console.warn('ig photo error', i+1, e); }
   }
+  alert('Done! Downloaded ' + saved + ' of ' + photoPosts.length + ' photos.');
 }
 
 function triggerDownload(blob, filename) {

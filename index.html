@@ -394,7 +394,22 @@ async function scrapeAll(token) {
       startUrls: [{ url: gmapsUrl }],
       maxReviews, maxImages: 20,
       reviewsSort: 'newest', language: 'en', scrapeReviewerInfo: true,
-    }).then(runId => pollRun(token, runId)).then(r => ({ type: 'gmaps', data: r[0] })).catch(e => ({ type: 'gmaps', error: e.message })));
+    }).then(runId => pollRun(token, runId)).then(async r => {
+      const place = r[0];
+      // Fetch website from Google Maps profile if available
+      if (place.website) {
+        try {
+          const resp = await fetch('/api/proxy?url=' + encodeURIComponent(place.website));
+          const html = await resp.text();
+          const div = document.createElement('div');
+          div.innerHTML = html;
+          div.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
+          place.websiteCopy = (div.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 5000);
+          place.websiteUrl = place.website;
+        } catch(e) { place.websiteCopyError = e.message; }
+      }
+      return { type: 'gmaps', data: place };
+    }).catch(e => ({ type: 'gmaps', error: e.message })));
   }
 
   if (igHandle) {
@@ -491,7 +506,50 @@ function renderAll(combined) {
     <button class="btn btn-outline" onclick="dlAllJSON()">Download full brief</button>
     <button class="btn btn-outline" onclick="dlAllPhotos()">Save all photos</button>
     <button class="btn btn-outline" onclick="dlAllCaptions()">Captions .txt</button>
+    <button class="btn btn-outline" onclick="dlResearchTxt()">Research .txt</button>
   `;
+}
+
+function dlResearchTxt() {
+  if (!data) return;
+  const lines = [];
+  const gmaps = data.gmaps;
+  const research = data.research;
+
+  lines.push('=== BUSINESS RESEARCH BRIEF ===\n');
+
+  if (gmaps) {
+    lines.push('--- FROM GOOGLE MAPS ---');
+    if (gmaps.title) lines.push('Name: ' + gmaps.title);
+    if (gmaps.address) lines.push('Address: ' + gmaps.address);
+    if (gmaps.phone) lines.push('Phone: ' + gmaps.phone);
+    if (gmaps.website) lines.push('Website: ' + gmaps.website);
+    if (gmaps.totalScore) lines.push('Rating: ' + gmaps.totalScore + ' (' + (gmaps.reviewsCount||0) + ' reviews)');
+    if (gmaps.description) lines.push('Description: ' + gmaps.description);
+    if (gmaps.categoryName) lines.push('Category: ' + gmaps.categoryName);
+    if (gmaps.openingHours) lines.push('Hours: ' + JSON.stringify(gmaps.openingHours));
+    if (gmaps.websiteUrl) lines.push('\n--- WEBSITE FROM MAPS PROFILE (' + gmaps.websiteUrl + ') ---');
+    if (gmaps.websiteCopy) lines.push(gmaps.websiteCopy);
+    lines.push('');
+  }
+
+  if (research) {
+    lines.push('--- FROM GOOGLE SEARCH ---');
+    if (research.website) lines.push('Website found: ' + research.website);
+    if (research.instagram) lines.push('Instagram found: ' + research.instagram);
+    if (research.websiteCopy) {
+      lines.push('\n--- WEBSITE COPY ---');
+      lines.push(research.websiteCopy);
+    }
+    lines.push('\n--- SEARCH RESULTS ---');
+    (research.sources || []).forEach((s, i) => {
+      lines.push((i+1) + '. ' + s.title);
+      lines.push('   ' + s.url);
+      if (s.description) lines.push('   ' + s.description);
+    });
+  }
+
+  triggerDownload(new Blob([lines.join('\n')], {type:'text/plain'}), 'research-brief.txt');
 }
 
 function dlAllJSON() {

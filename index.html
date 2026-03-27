@@ -699,21 +699,22 @@ async function dlZipAll() {
   if (!data) return;
   const btn = event.target;
   btn.disabled = true;
-  btn.textContent = 'Zipping... please wait';
+  btn.textContent = 'Creating ZIP...';
 
   const zip = new JSZip();
   const gmaps = data.gmaps || {};
   const posts = data.ig || [];
   const research = data.research || {};
+  const fbPosts = data.fb || [];
 
-  // Add JSON brief
   zip.file('brief.json', JSON.stringify(data, null, 2));
 
-  // Add captions
-  const captions = posts.filter(p=>p.caption).map((p,i)=>`--- Post ${i+1} ---\n${p.caption}\n`).join('\n');
+  const captions = posts.filter(p=>p.caption).map((p,i)=>'--- Post ' + (i+1) + ' ---\n' + p.caption + '\n').join('\n');
   if (captions) zip.file('captions.txt', captions);
 
-  // Add research txt
+  const fbCaptions = fbPosts.filter(p=>p.text).map((p,i)=>'--- FB Post ' + (i+1) + ' ---\n' + p.text + '\n').join('\n');
+  if (fbCaptions) zip.file('facebook-captions.txt', fbCaptions);
+
   const resLines = [];
   if (gmaps.title) resLines.push('Name: ' + gmaps.title);
   if (gmaps.address) resLines.push('Address: ' + gmaps.address);
@@ -721,79 +722,22 @@ async function dlZipAll() {
   if (gmaps.totalScore) resLines.push('Rating: ' + gmaps.totalScore + ' (' + (gmaps.reviewsCount||0) + ' reviews)');
   if (gmaps.website) resLines.push('Website: ' + gmaps.website);
   if (gmaps.websiteCopy) resLines.push('\n--- WEBSITE COPY ---\n' + gmaps.websiteCopy);
-  if (research.websiteCopy) resLines.push('\n--- GOOGLE SEARCH WEBSITE COPY ---\n' + research.websiteCopy);
-  if (research.sources) resLines.push('\n--- SEARCH RESULTS ---\n' + research.sources.map((s,i)=>`${i+1}. ${s.title}\n   ${s.url}\n   ${s.description||''}`).join('\n'));
-  if (combined.research && combined.research.extraLinks) {
-    combined.research.extraLinks.forEach((l,i) => {
-      resLines.push('\n--- EXTRA LINK ' + (i+1) + ': ' + l.url + ' ---');
-      resLines.push(l.content);
-    });
-  }
+  if (research.websiteCopy) resLines.push('\n--- GOOGLE SEARCH COPY ---\n' + research.websiteCopy);
+  if (research.sources) resLines.push('\n--- SEARCH RESULTS ---\n' + research.sources.map((s,i)=> (i+1) + '. ' + s.title + '\n   ' + s.url).join('\n'));
+  if (research.extraLinks) research.extraLinks.forEach((l,i) => { resLines.push('\n--- EXTRA LINK ' + (i+1) + ': ' + l.url + ' ---\n' + (l.content||'')); });
   if (resLines.length) zip.file('research.txt', resLines.join('\n'));
 
-  // Add photos
-  const photosFolder = zip.folder('photos');
   const gmapsPhotos = gmaps.imageUrls || [];
-  const igPhotos = posts.filter(p => p.displayUrl || p.videoUrl);
-  let count = 0;
+  const igPhotoUrls = posts.filter(p=>p.displayUrl).map(p=>p.displayUrl);
+  const allPhotoUrls = [...gmapsPhotos, ...igPhotoUrls];
+  if (allPhotoUrls.length) zip.file('photo-urls.txt', allPhotoUrls.join('\n'));
 
-  btn.textContent = 'Downloading photos...';
-
-  for (let i = 0; i < gmapsPhotos.length; i++) {
-    try {
-      const resp = await fetch('/api/proxy?url=' + encodeURIComponent(gmapsPhotos[i]));
-      const blob = await resp.blob();
-      const ext = blob.type.includes('png') ? 'png' : 'jpg';
-      photosFolder.file(`gmaps-${String(i+1).padStart(2,'0')}.${ext}`, blob);
-      count++;
-      btn.textContent = `Downloading photos... (${count})`;
-    } catch(e) {}
-  }
-
-  // FB photos
-  const fbAllPhotos = (data.fb||[]).flatMap(p=>(p.media||[]).map(m=>m.url||m.src||'')).filter(Boolean);
-  for (let i = 0; i < fbAllPhotos.length; i++) {
-    try {
-      const blob = await proxyFetch(fbAllPhotos[i]);
-      photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
-      count++;
-      btn.textContent = `Downloading photos... (${count}/${gmapsPhotos.length + igPhotos.length + fbAllPhotos.length})`;
-    } catch(e) {}
-  }
-
-  for (let i = 0; i < igPhotos.length; i++) {
-    try {
-      const p = igPhotos[i];
-      const isVideo = p.type === 'Video';
-      const url = isVideo ? (p.videoUrl || p.displayUrl) : p.displayUrl;
-      const blob = await proxyFetch(url);
-      const ext = isVideo ? 'mp4' : 'jpg';
-      photosFolder.file(`ig-${String(i+1).padStart(2,'0')}.${ext}`, blob);
-      count++;
-      btn.textContent = `Downloading photos... (${count})`;
-    } catch(e) {}
-  }
-
-  btn.textContent = 'Creating ZIP...';
-  const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 6 } });
+  const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
   const name = (gmaps.title || 'client').toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-');
-  triggerDownload(zipBlob, `${name}-full-brief.zip`);
+  triggerDownload(zipBlob, name + '-brief.zip');
   btn.disabled = false;
   btn.textContent = '⬇ Download everything as ZIP';
 }
-
-function dlAllJSON() {
-  if (!data) return;
-  triggerDownload(new Blob([JSON.stringify(data, null, 2)], {type:'application/json'}), 'full-brief.json');
-}
-
-function dlAllCaptions() {
-  if (!data) return;
-  const posts = data.ig || [];
-  const lines = posts.filter(p=>p.caption).map((p,i)=>`--- Post ${i+1} ---\n${p.caption}\n`).join('\n');
-  triggerDownload(new Blob([lines], {type:'text/plain'}), 'captions.txt');
-}
-
 async function dlAllPhotos() {
   if (!data) return;
   const gmapsPhotos = data.gmaps?.imageUrls || [];

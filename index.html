@@ -438,12 +438,30 @@ async function scrapeAll(token) {
   const fbUrl = document.getElementById('all-fb') ? document.getElementById('all-fb').value.trim() : '';
 
   if (fbUrl) {
-    promises.push(startActor(token, 'apify~facebook-pages-scraper', {
-      startUrls: [{ url: fbUrl }],
-      maxPosts: maxPosts,
-      maxPostComments: 0,
-      scrapeAbout: true,
-    }).then(runId => pollRun(token, runId)).then(r => ({ type: 'fb', data: r })).catch(e => ({ type: 'fb', error: e.message })));
+    promises.push(
+      startActor(token, 'apify~facebook-posts-scraper', {
+        startUrls: [{ url: fbUrl }],
+        maxPosts: maxPosts,
+        maxPostComments: 0,
+        scrapeAbout: true,
+      }).then(runId => pollRun(token, runId)).then(r => {
+        if (!r || r.length === 0) throw new Error('no results');
+        return { type: 'fb', data: r };
+      }).catch(async () => {
+        // Fallback: direct proxy fetch of Facebook page
+        try {
+          const resp = await fetch('/api/proxy?url=' + encodeURIComponent(fbUrl));
+          const html = await resp.text();
+          const div = document.createElement('div');
+          div.innerHTML = html;
+          div.querySelectorAll('script,style').forEach(el => el.remove());
+          const text = (div.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 8000);
+          return { type: 'fb', data: [{ text, url: fbUrl, isFallback: true }] };
+        } catch(e2) {
+          return { type: 'fb', error: e2.message };
+        }
+      })
+    );
   }
 
   if (igHandle) {

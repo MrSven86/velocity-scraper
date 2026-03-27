@@ -699,7 +699,7 @@ async function dlZipAll() {
   if (!data) return;
   const btn = event.target;
   btn.disabled = true;
-  btn.textContent = 'Creating ZIP...';
+  btn.textContent = 'Zipping... 0%';
 
   const zip = new JSZip();
   const gmaps = data.gmaps || {};
@@ -707,6 +707,7 @@ async function dlZipAll() {
   const research = data.research || {};
   const fbPosts = data.fb || [];
 
+  // Text files - instant
   zip.file('brief.json', JSON.stringify(data, null, 2));
 
   const captions = posts.filter(p=>p.caption).map((p,i)=>'--- Post ' + (i+1) + ' ---\n' + p.caption + '\n').join('\n');
@@ -727,14 +728,52 @@ async function dlZipAll() {
   if (research.extraLinks) research.extraLinks.forEach((l,i) => { resLines.push('\n--- EXTRA LINK ' + (i+1) + ': ' + l.url + ' ---\n' + (l.content||'')); });
   if (resLines.length) zip.file('research.txt', resLines.join('\n'));
 
+  // Photos - download with timeout and progress
+  const photosFolder = zip.folder('photos');
   const gmapsPhotos = gmaps.imageUrls || [];
-  const igPhotoUrls = posts.filter(p=>p.displayUrl).map(p=>p.displayUrl);
-  const allPhotoUrls = [...gmapsPhotos, ...igPhotoUrls];
-  if (allPhotoUrls.length) zip.file('photo-urls.txt', allPhotoUrls.join('\n'));
+  const igPhotos = posts.filter(p => p.displayUrl || p.videoUrl);
+  const fbPhotos = fbPosts.flatMap(p=>(p.media||[]).map(m=>m.url||m.src||'')).filter(Boolean);
+  const totalPhotos = gmapsPhotos.length + igPhotos.length + fbPhotos.length;
+  let count = 0;
 
+  const updateBtn = () => {
+    const pct = totalPhotos > 0 ? Math.round((count/totalPhotos)*100) : 100;
+    btn.textContent = 'Downloading photos... ' + count + '/' + totalPhotos + ' (' + pct + '%)';
+  };
+
+  for (let i = 0; i < gmapsPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(gmapsPhotos[i], 10000);
+      const ext = blob.type.includes('png') ? 'png' : 'jpg';
+      photosFolder.file('gmaps-' + String(i+1).padStart(2,'0') + '.' + ext, blob);
+    } catch(e) {}
+    count++; updateBtn();
+  }
+
+  for (let i = 0; i < igPhotos.length; i++) {
+    try {
+      const p = igPhotos[i];
+      const isVideo = p.type === 'Video';
+      const url = isVideo ? (p.videoUrl || p.displayUrl) : p.displayUrl;
+      const blob = await proxyFetch(url, 10000);
+      const ext = isVideo ? 'mp4' : 'jpg';
+      photosFolder.file('ig-' + String(i+1).padStart(2,'0') + '.' + ext, blob);
+    } catch(e) {}
+    count++; updateBtn();
+  }
+
+  for (let i = 0; i < fbPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(fbPhotos[i], 10000);
+      photosFolder.file('fb-' + String(i+1).padStart(2,'0') + '.jpg', blob);
+    } catch(e) {}
+    count++; updateBtn();
+  }
+
+  btn.textContent = 'Creating ZIP file...';
   const zipBlob = await zip.generateAsync({ type: 'blob', compression: 'DEFLATE', compressionOptions: { level: 3 } });
   const name = (gmaps.title || 'client').toLowerCase().replace(/[^a-z0-9]/g,'-').replace(/-+/g,'-');
-  triggerDownload(zipBlob, name + '-brief.zip');
+  triggerDownload(zipBlob, name + '-full-brief.zip');
   btn.disabled = false;
   btn.textContent = '⬇ Download everything as ZIP';
 }

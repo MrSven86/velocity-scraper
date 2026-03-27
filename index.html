@@ -441,7 +441,10 @@ async function scrapeAll(token) {
     promises.push(startActor(token, 'apify~facebook-posts-scraper', {
       startUrls: [{ url: fbUrl }],
       maxPosts: maxPosts,
+      maxPostComments: 0,
+      maxReviews: 0,
       scrapeAbout: true,
+      scrapePostsUntilDate: '',
     }).then(runId => pollRun(token, runId)).then(r => ({ type: 'fb', data: r })).catch(e => ({ type: 'fb', error: e.message })));
   }
 

@@ -97,6 +97,8 @@
       <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires" />
       <label>Facebook page URL (optional)</label>
       <input type="text" id="all-fb" placeholder="https://www.facebook.com/pagename/" />
+      <label>Extra links (optional) — one URL per line</label>
+      <textarea id="all-links" placeholder="https://www.wanderlog.com/...&#10;https://lacabeautysarmiento.com.ar/..." style="width:100%;height:80px;padding:10px 14px;border:1px solid #ddd;border-radius:8px;font-size:13px;background:#fafafa;resize:vertical;margin-bottom:16px;font-family:inherit;"></textarea>
       <div class="row">
         <div>
           <label>Max reviews</label>
@@ -477,6 +479,25 @@ async function scrapeAll(token) {
           brief.websiteCopy = (div.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 5000);
         } catch(e) {}
       }
+      // Fetch extra links
+      const extraLinksRaw = document.getElementById('all-links') ? document.getElementById('all-links').value.trim() : '';
+      if (extraLinksRaw) {
+        const extraUrls = extraLinksRaw.split('\n').map(u => u.trim()).filter(u => u.startsWith('http'));
+        brief.extraLinks = [];
+        for (const url of extraUrls) {
+          try {
+            const resp = await fetch('/api/proxy?url=' + encodeURIComponent(url));
+            const html = await resp.text();
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            div.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
+            const text = (div.innerText || '').replace(/\s+/g, ' ').trim().substring(0, 3000);
+            brief.extraLinks.push({ url, content: text });
+          } catch(e) {
+            brief.extraLinks.push({ url, content: 'Could not fetch: ' + e.message });
+          }
+        }
+      }
       return { type: 'research', data: brief };
     }).catch(e => ({ type: 'research', error: e.message })));
   }
@@ -586,7 +607,16 @@ function renderAll(combined) {
       </div>`;
     });
   }
-  if (!gmaps.websiteCopy && !research.websiteCopy && (!research.sources || !research.sources.length)) {
+  if (research.extraLinks && research.extraLinks.length) {
+    researchHtml += '<p style="font-weight:600;margin:16px 0 8px;">Extra links:</p>';
+    research.extraLinks.forEach((l,i) => {
+      researchHtml += '<div style="margin-bottom:12px;padding:10px;border:1px solid #eee;border-radius:6px;">';
+      researchHtml += '<a href="' + l.url + '" target="_blank" style="color:#1a56db;font-weight:500;font-size:13px;">' + l.url + '</a>';
+      researchHtml += '<pre style="white-space:pre-wrap;font-size:12px;color:#333;margin-top:6px;background:#f9f9f5;padding:8px;border-radius:4px;">' + (l.content || '') + '</pre>';
+      researchHtml += '</div>';
+    });
+  }
+  if (!gmaps.websiteCopy && !research.websiteCopy && (!research.sources || !research.sources.length) && (!research.extraLinks || !research.extraLinks.length)) {
     researchHtml += '<p style="color:#999;">No web research data found.</p>';
   }
   researchHtml += '</div>';
@@ -671,6 +701,12 @@ async function dlZipAll() {
   if (gmaps.websiteCopy) resLines.push('\n--- WEBSITE COPY ---\n' + gmaps.websiteCopy);
   if (research.websiteCopy) resLines.push('\n--- GOOGLE SEARCH WEBSITE COPY ---\n' + research.websiteCopy);
   if (research.sources) resLines.push('\n--- SEARCH RESULTS ---\n' + research.sources.map((s,i)=>`${i+1}. ${s.title}\n   ${s.url}\n   ${s.description||''}`).join('\n'));
+  if (combined.research && combined.research.extraLinks) {
+    combined.research.extraLinks.forEach((l,i) => {
+      resLines.push('\n--- EXTRA LINK ' + (i+1) + ': ' + l.url + ' ---');
+      resLines.push(l.content);
+    });
+  }
   if (resLines.length) zip.file('research.txt', resLines.join('\n'));
 
   // Add photos

@@ -79,6 +79,9 @@
       <button class="mode-btn" id="mode-research" onclick="setMode('research')">
         <span class="icon">🔍</span>Research
       </button>
+      <button class="mode-btn" id="mode-fb" onclick="setMode('fb')">
+        <span class="icon">📘</span>Facebook
+      </button>
     </div>
 
     <label>Apify API token</label>
@@ -92,6 +95,8 @@
       <input type="text" id="all-ig" placeholder="https://www.instagram.com/lapelu.belgrano/ or just lapelu.belgrano" />
       <label>Business name + city</label>
       <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires" />
+      <label>Facebook page URL (optional)</label>
+      <input type="text" id="all-fb" placeholder="https://www.facebook.com/pagename/" />
       <div class="row">
         <div>
           <label>Max reviews</label>
@@ -156,6 +161,19 @@
       <input type="text" id="research-city" placeholder="Buenos Aires, Argentina" />
     </div>
 
+    <div id="fb-fields" class="hidden">
+      <div class="tip">Paste the Facebook page URL. Example: https://www.facebook.com/vamapintura/</div>
+      <label>Facebook page URL</label>
+      <input type="text" id="fb-query" placeholder="https://www.facebook.com/pagename/" />
+      <label>Max posts to scrape</label>
+      <select id="fb-maxPosts">
+        <option value="12">12 posts</option>
+        <option value="24">24 posts</option>
+        <option value="50" selected>50 posts</option>
+        <option value="100">100 posts</option>
+      </select>
+    </div>
+
     <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
@@ -170,6 +188,7 @@
     <div id="pane-photos" class="hidden"></div>
     <div id="pane-posts" class="hidden"></div>
     <div id="pane-captions" class="hidden"></div>
+    <div id="pane-fbposts" class="hidden"></div>
     <div id="pane-webresearch" class="hidden"></div>
     <div class="dl-btns" id="dl-btns"></div>
     <button class="btn btn-outline" style="margin-top:8px;width:100%;" onclick="reset()">Scrape another</button>
@@ -182,7 +201,7 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','gmaps','ig','research'].forEach(m => {
+  ['all','gmaps','ig','research','fb'].forEach(m => {
     document.getElementById(m + '-fields').classList.toggle('hidden', m !== mode);
     document.getElementById('mode-' + m).classList.toggle('active', m === mode);
   });
@@ -365,6 +384,8 @@ async function startScrape() {
       await scrapeGmaps(token);
     } else if (currentMode === 'ig') {
       await scrapeInstagram(token);
+    } else if (currentMode === 'fb') {
+      await scrapeFacebook(token);
     } else {
       await scrapeResearch(token);
     }
@@ -412,6 +433,16 @@ async function scrapeAll(token) {
     }).catch(e => ({ type: 'gmaps', error: e.message })));
   }
 
+  const fbUrl = document.getElementById('all-fb') ? document.getElementById('all-fb').value.trim() : '';
+
+  if (fbUrl) {
+    promises.push(startActor(token, 'apify~facebook-posts-scraper', {
+      startUrls: [{ url: fbUrl }],
+      maxPosts: maxPosts,
+      scrapeAbout: true,
+    }).then(runId => pollRun(token, runId)).then(r => ({ type: 'fb', data: r })).catch(e => ({ type: 'fb', error: e.message })));
+  }
+
   if (igHandle) {
     promises.push(startActor(token, 'apify~instagram-post-scraper', {
       username: [igHandle], resultsLimit: maxPosts,
@@ -457,6 +488,7 @@ async function scrapeAll(token) {
   for (const r of results) {
     if (r.type === 'gmaps' && !r.error) combined.gmaps = r.data;
     if (r.type === 'ig' && !r.error) combined.ig = r.data;
+    if (r.type === 'fb' && !r.error) combined.fb = r.data;
     if (r.type === 'research' && !r.error) combined.research = r.data;
   }
 
@@ -471,13 +503,15 @@ function renderAll(combined) {
   const reviews = combined.gmaps?.reviews || [];
   const photos = combined.gmaps?.imageUrls || [];
   const posts = combined.ig || [];
+  const fbPosts = combined.fb || [];
   const captions = posts.filter(p => p.caption);
   const researchData = combined.research;
+  const totalPhotos = photos.length + posts.filter(p=>p.displayUrl).length + fbPosts.flatMap(p=>p.media||[]).length;
 
   document.getElementById('stats').innerHTML = `
     <div class="stat"><div class="stat-num">${reviews.length}</div><div class="stat-label">reviews</div></div>
-    <div class="stat"><div class="stat-num">${posts.length}</div><div class="stat-label">IG posts</div></div>
-    <div class="stat"><div class="stat-num">${photos.length + posts.filter(p=>p.displayUrl).length}</div><div class="stat-label">photos/videos</div></div>
+    <div class="stat"><div class="stat-num">${posts.length + fbPosts.length}</div><div class="stat-label">IG+FB posts</div></div>
+    <div class="stat"><div class="stat-num">${totalPhotos}</div><div class="stat-label">photos/videos</div></div>
   `;
 
   document.getElementById('result-tabs').innerHTML = `
@@ -485,6 +519,7 @@ function renderAll(combined) {
     <button class="tab" onclick="switchTab('posts',this)">Reviews (${reviews.length})</button>
     <button class="tab" onclick="switchTab('photos',this)">Photos (${photos.length})</button>
     <button class="tab" onclick="switchTab('captions',this)">IG Captions (${captions.length})</button>
+
     <button class="tab" onclick="switchTab('webresearch',this)">Web Research</button>
   `;
 
@@ -523,6 +558,14 @@ function renderAll(combined) {
   document.getElementById('pane-captions').innerHTML = captions.length === 0
     ? '<p style="color:#999;font-size:13px">No captions.</p>'
     : captions.map((p,i)=>`<div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;"><div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.timestamp?new Date(p.timestamp).toLocaleDateString():''}</div><div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.caption}</div></div>`).join('');
+
+  // FB Posts
+  if (fbPosts.length > 0) {
+    document.getElementById('pane-fbposts').innerHTML = fbPosts.map((p,i) => {
+      const img = p.media && p.media[0] ? `<img src="${p.media[0].url||p.media[0].src||''}" style="width:100%;max-height:300px;object-fit:cover;border-radius:6px;margin-bottom:8px;" onerror="this.style.display='none'" />` : '';
+      return `<div class="review" style="margin-bottom:12px;">${img}<div style="font-size:13px;color:#333;line-height:1.6;white-space:pre-wrap;">${p.text||'(no text)'}</div><div style="font-size:12px;color:#999;margin-top:6px;">${p.time?new Date(p.time*1000).toLocaleDateString():''} · ${p.likes||0} likes</div></div>`;
+    }).join('');
+  }
 
   // Web Research
   let researchHtml = '<div style="font-size:13px;line-height:1.8;">';
@@ -649,6 +692,17 @@ async function dlZipAll() {
     } catch(e) {}
   }
 
+  // FB photos
+  const fbAllPhotos = (data.fb||[]).flatMap(p=>(p.media||[]).map(m=>m.url||m.src||'')).filter(Boolean);
+  for (let i = 0; i < fbAllPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(fbAllPhotos[i]);
+      photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
+      count++;
+      btn.textContent = `Downloading photos... (${count})`;
+    } catch(e) {}
+  }
+
   for (let i = 0; i < igPhotos.length; i++) {
     try {
       const p = igPhotos[i];
@@ -694,6 +748,17 @@ async function dlAllPhotos() {
       saved++; await sleep(400);
     } catch(e) {}
   }
+  // FB photos
+  const fbAllPhotos = (data.fb||[]).flatMap(p=>(p.media||[]).map(m=>m.url||m.src||'')).filter(Boolean);
+  for (let i = 0; i < fbAllPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(fbAllPhotos[i]);
+      photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
+      count++;
+      btn.textContent = `Downloading photos... (${count})`;
+    } catch(e) {}
+  }
+
   for (let i = 0; i < igPhotos.length; i++) {
     try {
       const p = igPhotos[i];
@@ -705,6 +770,97 @@ async function dlAllPhotos() {
     } catch(e) {}
   }
   alert('Downloaded ' + saved + ' files!');
+}
+
+async function scrapeFacebook(token) {
+  const query = document.getElementById('fb-query').value.trim();
+  if (!query) throw new Error('Please enter a Facebook page URL');
+  const maxPosts = parseInt(document.getElementById('fb-maxPosts').value);
+
+  setStatus('Starting Facebook scraper... 1-3 minutes', 'info');
+
+  const input = {
+    startUrls: [{ url: query }],
+    maxPosts: maxPosts,
+    scrapeAbout: true,
+    scrapeReviews: false,
+  };
+
+  const runId = await startActor(token, 'apify~facebook-posts-scraper', input);
+  const result = await pollRun(token, runId);
+  data = { mode: 'fb', posts: result };
+  renderFacebook(result);
+}
+
+function renderFacebook(posts) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  const withCaption = posts.filter(p => p.text && p.text.trim().length > 0);
+  const withPhoto = posts.filter(p => p.media && p.media.length > 0);
+
+  document.getElementById('stats').innerHTML = `
+    <div class="stat"><div class="stat-num">${posts.length}</div><div class="stat-label">posts</div></div>
+    <div class="stat"><div class="stat-num">${withCaption.length}</div><div class="stat-label">with captions</div></div>
+    <div class="stat"><div class="stat-num">${withPhoto.length}</div><div class="stat-label">with photos</div></div>
+  `;
+
+  document.getElementById('result-tabs').innerHTML = `
+    <button class="tab active" onclick="switchTab('posts',this)">Posts (${posts.length})</button>
+    <button class="tab" onclick="switchTab('captions',this)">Captions (${withCaption.length})</button>
+    <button class="tab" onclick="switchTab('photos',this)">Photos</button>
+  `;
+
+  document.getElementById('pane-posts').innerHTML = posts.length === 0
+    ? '<p style="color:#999;font-size:13px">No posts found.</p>'
+    : posts.map((p,i) => {
+      const img = p.media && p.media[0] ? `<img src="${p.media[0].url || p.media[0].src || ''}" style="width:100%;max-height:300px;object-fit:cover;border-radius:6px;margin-bottom:8px;" onerror="this.style.display='none'" />` : '';
+      return `<div class="review" style="margin-bottom:12px;">
+        ${img}
+        <div style="font-size:13px;color:#333;line-height:1.6;white-space:pre-wrap;">${p.text || '(no text)'}</div>
+        <div style="font-size:12px;color:#999;margin-top:6px;">${p.time ? new Date(p.time*1000).toLocaleDateString() : ''} · ${p.likes || 0} likes</div>
+      </div>`;
+    }).join('');
+
+  document.getElementById('pane-captions').innerHTML = withCaption.length === 0
+    ? '<p style="color:#999;font-size:13px">No captions.</p>'
+    : `<div style="margin-bottom:10px;"><button class="btn btn-outline" style="width:auto;padding:8px 16px;" onclick="dlFbCaptions()">Download captions .txt</button></div>` +
+      withCaption.map((p,i) => `<div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;">
+        <div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.time ? new Date(p.time*1000).toLocaleDateString() : ''}</div>
+        <div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.text}</div>
+      </div>`).join('');
+
+  const allPhotos = posts.flatMap(p => (p.media || []).map(m => m.url || m.src || '')).filter(Boolean);
+  document.getElementById('pane-photos').innerHTML = allPhotos.length === 0
+    ? '<p style="color:#999;font-size:13px">No photos found.</p>'
+    : `<div class="photo-grid">${allPhotos.map(url => `<img src="${url}" onclick="window.open('${url}','_blank')" onerror="this.style.display='none'" />`).join('')}</div>`;
+
+  document.getElementById('dl-btns').innerHTML = `
+    <button class="btn btn-outline" onclick="dlJSON()">Download JSON</button>
+    <button class="btn btn-outline" onclick="dlFbCaptions()">Captions .txt</button>
+    <button class="btn btn-outline" onclick="dlFbPhotos()">Save all photos</button>
+  `;
+}
+
+function dlFbCaptions() {
+  if (!data || data.mode !== 'fb') return;
+  const lines = data.posts.filter(p=>p.text).map((p,i)=>'--- Post ' + (i+1) + ' ---\n' + p.text + '\n').join('\n');
+  triggerDownload(new Blob([lines], {type:'text/plain'}), 'facebook-captions.txt');
+}
+
+async function dlFbPhotos() {
+  if (!data || data.mode !== 'fb') return;
+  const allPhotos = data.posts.flatMap(p => (p.media||[]).map(m => m.url||m.src||'')).filter(Boolean);
+  if (!allPhotos.length) { alert('No photos found.'); return; }
+  let saved = 0;
+  for (let i = 0; i < allPhotos.length; i++) {
+    try {
+      const blob = await proxyFetch(allPhotos[i]);
+      triggerDownload(blob, `fb-photo-${String(i+1).padStart(2,'0')}.jpg`);
+      saved++; await sleep(400);
+    } catch(e) {}
+  }
+  alert('Downloaded ' + saved + ' photos!');
 }
 
 async function scrapeGmaps(token) {
@@ -909,8 +1065,9 @@ function renderInstagram(posts) {
 function switchTab(name, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  ['overview','reviews','photos','posts','captions','webresearch'].forEach(p => {
-    document.getElementById('pane-' + p).classList.toggle('hidden', p !== name);
+  ['overview','reviews','photos','posts','captions','fbposts','webresearch'].forEach(p => {
+    const el = document.getElementById('pane-' + p);
+    if (el) el.classList.toggle('hidden', p !== name);
   });
 }
 

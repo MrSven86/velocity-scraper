@@ -93,8 +93,8 @@
       <input type="text" id="all-gmaps" placeholder="https://maps.google.com/..." />
       <label>Instagram handle</label>
       <input type="text" id="all-ig" placeholder="https://www.instagram.com/lapelu.belgrano/ or just lapelu.belgrano" />
-      <label>Business name + city</label>
-      <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires" />
+      <label>Business name + city (optional — auto-detected from Maps)</label>
+      <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires — leave blank if Maps URL provided" />
       <label>Facebook page URL (optional)</label>
       <input type="text" id="all-fb" placeholder="https://www.facebook.com/pagename/" />
       <label>Extra links (optional) — one URL per line</label>
@@ -439,12 +439,11 @@ async function scrapeAll(token) {
 
   if (fbUrl) {
     promises.push(startActor(token, 'apify~facebook-posts-scraper', {
-      startUrls: [{ url: fbUrl }],
+      startUrls: [{ url: fbUrl, method: 'GET' }],
       maxPosts: maxPosts,
       maxPostComments: 0,
       maxReviews: 0,
       scrapeAbout: true,
-      scrapePostsUntilDate: '',
     }).then(runId => pollRun(token, runId)).then(r => ({ type: 'fb', data: r })).catch(e => ({ type: 'fb', error: e.message })));
   }
 
@@ -550,6 +549,9 @@ function renderAll(combined) {
   // Overview
   const gmaps = combined.gmaps || {};
   const research = researchData || {};
+  // Auto-fill business name if Maps data available
+  const autoName = gmaps.title || '';
+  const autoCity = gmaps.address ? gmaps.address.split(',').slice(-2).join(',').trim() : '';
   let overviewHtml = '<div style="font-size:14px;line-height:2;">';
   if (gmaps.title) overviewHtml += `<p><strong>Name:</strong> ${gmaps.title}</p>`;
   if (gmaps.address) overviewHtml += `<p><strong>Address:</strong> ${gmaps.address}</p>`;

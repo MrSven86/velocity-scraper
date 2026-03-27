@@ -739,7 +739,7 @@ async function dlZipAll() {
       const blob = await proxyFetch(fbAllPhotos[i]);
       photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
       count++;
-      btn.textContent = `Downloading photos... (${count})`;
+      btn.textContent = `Downloading photos... (${count}/${gmapsPhotos.length + igPhotos.length + fbAllPhotos.length})`;
     } catch(e) {}
   }
 
@@ -795,7 +795,7 @@ async function dlAllPhotos() {
       const blob = await proxyFetch(fbAllPhotos[i]);
       photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
       count++;
-      btn.textContent = `Downloading photos... (${count})`;
+      btn.textContent = `Downloading photos... (${count}/${gmapsPhotos.length + igPhotos.length + fbAllPhotos.length})`;
     } catch(e) {}
   }
 
@@ -1155,10 +1155,18 @@ async function dlPhotos() {
   }
 }
 
-async function proxyFetch(url) {
-  const resp = await fetch('/api/proxy?url=' + encodeURIComponent(url));
-  if (!resp.ok) throw new Error('proxy failed ' + resp.status);
-  return await resp.blob();
+async function proxyFetch(url, timeoutMs=8000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const resp = await fetch('/api/proxy?url=' + encodeURIComponent(url), { signal: controller.signal });
+    clearTimeout(timer);
+    if (!resp.ok) throw new Error('proxy failed ' + resp.status);
+    return await resp.blob();
+  } catch(e) {
+    clearTimeout(timer);
+    throw e;
+  }
 }
 
 async function dlIgPhotos() {

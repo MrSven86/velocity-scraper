@@ -59,6 +59,7 @@
   .tip { font-size: 12px; color: #888; background: #f9f9f5; border-radius: 6px; padding: 8px 12px; margin-bottom: 16px; line-height: 1.5; }
 </style>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 </head>
 <body>
 <div class="wrap">
@@ -81,6 +82,9 @@
       </button>
       <button class="mode-btn" id="mode-fb" onclick="setMode('fb')">
         <span class="icon">📘</span>Facebook
+      </button>
+      <button class="mode-btn" id="mode-special" onclick="setMode('special')" style="background:#fff8e1;border-color:#f59e0b;">
+        <span class="icon">🌍</span>Special Research
       </button>
     </div>
 
@@ -176,6 +180,22 @@
       </select>
     </div>
 
+    <div id="special-fields" class="hidden">
+      <div class="tip">Find businesses worldwide by keyword. Example: search "swedish" in "Buenos Aires" to find Swedish-owned businesses. Outputs an Excel file with names, addresses, phones, websites, Maps URLs.</div>
+      <label>Keyword to search</label>
+      <input type="text" id="special-keyword" placeholder="swedish, svenska, sweden, nordic..." />
+      <label>City / Country</label>
+      <input type="text" id="special-location" placeholder="Buenos Aires, Argentina" />
+      <label>Business type (optional)</label>
+      <input type="text" id="special-type" placeholder="restaurant, salon, contractor, company..." />
+      <label>Max results</label>
+      <select id="special-max">
+        <option value="20" selected>20 businesses</option>
+        <option value="50">50 businesses</option>
+        <option value="100">100 businesses</option>
+      </select>
+    </div>
+
     <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
@@ -203,7 +223,7 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','gmaps','ig','research','fb'].forEach(m => {
+  ['all','gmaps','ig','research','fb','special'].forEach(m => {
     document.getElementById(m + '-fields').classList.toggle('hidden', m !== mode);
     document.getElementById('mode-' + m).classList.toggle('active', m === mode);
   });
@@ -388,6 +408,8 @@ async function startScrape() {
       await scrapeInstagram(token);
     } else if (currentMode === 'fb') {
       await scrapeFacebook(token);
+    } else if (currentMode === 'special') {
+      await scrapeSpecial(token);
     } else {
       await scrapeResearch(token);
     }
@@ -1210,6 +1232,153 @@ function reset() {
   const btn = document.getElementById('run-btn');
   btn.disabled = false;
   btn.innerHTML = 'Start scraping';
+}
+
+async function scrapeSpecial(token) {
+  var keyword = document.getElementById('special-keyword').value.trim();
+  var location = document.getElementById('special-location').value.trim();
+  var bizType = document.getElementById('special-type').value.trim();
+  var maxResults = parseInt(document.getElementById('special-max').value);
+
+  if (!keyword) throw new Error('Please enter a keyword to search');
+  if (!location) throw new Error('Please enter a city or country');
+
+  var query = [keyword, bizType, location].filter(Boolean).join(' ');
+  setStatus('Searching Google Maps for: ' + query + '...', 'info');
+  setProgress(10);
+
+  var gmapsInput = {
+    searchStringsArray: [query],
+    maxCrawledPlacesPerSearch: maxResults,
+    language: 'en',
+    maxReviews: 0,
+    maxImages: 0,
+    scrapeReviewerInfo: false,
+  };
+
+  var searchInput = {
+    queries: keyword + ' ' + bizType + ' ' + location,
+    resultsPerPage: 10,
+    maxPagesPerQuery: 1,
+  };
+
+  setStatus('Running Maps + Google Search in parallel...', 'info');
+  setProgress(20);
+
+  var results = await Promise.all([
+    startActor(token, 'compass~crawler-google-places', gmapsInput)
+      .then(function(id) { return pollRun(token, id); })
+      .catch(function() { return []; }),
+    startActor(token, 'apify~google-search-scraper', searchInput)
+      .then(function(id) { return pollRun(token, id); })
+      .catch(function() { return []; }),
+  ]);
+
+  var mapsResult = results[0];
+  var searchResult = results[1];
+
+  setProgress(90);
+  setStatus('Processing results...', 'info');
+
+  var leads = [];
+  var existingNames = new Set();
+
+  for (var i = 0; i < (mapsResult || []).length; i++) {
+    var place = mapsResult[i];
+    leads.push({
+      name: place.title || '',
+      category: place.categoryName || '',
+      address: place.address || '',
+      phone: place.phone || '',
+      website: place.website || '',
+      rating: place.totalScore || '',
+      reviews: place.reviewsCount || 0,
+      google_maps_url: place.url || '',
+      instagram: '',
+      notes: '',
+    });
+    existingNames.add((place.title || '').toLowerCase());
+  }
+
+  for (var j = 0; j < (searchResult || []).length; j++) {
+    var page = searchResult[j];
+    for (var k = 0; k < (page.organicResults || []).length; k++) {
+      var r = page.organicResults[k];
+      if (!r.title || existingNames.has(r.title.toLowerCase())) continue;
+      if (r.url && (r.url.includes('instagram.com') || r.url.includes('facebook.com') || r.url.includes('google.com'))) continue;
+      leads.push({
+        name: r.title,
+        category: '',
+        address: '',
+        phone: '',
+        website: r.url || '',
+        rating: '',
+        reviews: '',
+        google_maps_url: '',
+        instagram: '',
+        notes: r.description || '',
+      });
+      existingNames.add(r.title.toLowerCase());
+    }
+  }
+
+  setProgress(100);
+  window._specialLeads = leads;
+  window._specialKeyword = keyword;
+  window._specialLocation = location;
+  renderSpecial(leads, keyword, location);
+}
+
+function renderSpecial(leads, keyword, location) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + leads.length + '</div><div class="stat-label">businesses found</div></div>' +
+    '<div class="stat"><div class="stat-num">' + leads.filter(function(l){return l.phone;}).length + '</div><div class="stat-label">with phone</div></div>' +
+    '<div class="stat"><div class="stat-num">' + leads.filter(function(l){return l.website;}).length + '</div><div class="stat-label">with website</div></div>';
+
+  document.getElementById('result-tabs').innerHTML =
+    '<button class="tab active" onclick="switchTab(\'posts\',this)">Results (' + leads.length + ')</button>';
+
+  if (leads.length === 0) {
+    document.getElementById('pane-posts').innerHTML = '<p style="color:#999;font-size:13px">No results found. Try different keywords.</p>';
+  } else {
+    document.getElementById('pane-posts').innerHTML = leads.map(function(l) {
+      return '<div class="review" style="margin-bottom:10px;">' +
+        '<div class="rev-header"><span class="rev-name">' + l.name + '</span>' +
+        '<span style="font-size:12px;color:#999;">' + (l.rating ? '&#9733; ' + l.rating + ' (' + l.reviews + ')' : '') + '</span></div>' +
+        '<div style="font-size:13px;color:#555;margin-top:4px;">' + l.category + '</div>' +
+        '<div style="font-size:13px;color:#444;margin-top:2px;">' + l.address + '</div>' +
+        (l.phone ? '<div style="font-size:13px;color:#1a56db;margin-top:2px;">&#128222; ' + l.phone + '</div>' : '') +
+        (l.website ? '<div style="font-size:12px;margin-top:2px;"><a href="' + l.website + '" target="_blank" style="color:#1a56db;">' + l.website + '</a></div>' : '') +
+        (l.notes ? '<div style="font-size:12px;color:#999;margin-top:4px;">' + l.notes + '</div>' : '') +
+        '</div>';
+    }).join('');
+  }
+
+  document.getElementById('dl-btns').innerHTML =
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlLeadsExcel()">Download Excel</button>';
+}
+
+function dlLeadsExcel() {
+  var leads = window._specialLeads;
+  if (!leads || !leads.length) return;
+
+  var ws_data = [['Name','Category','Address','Phone','Website','Rating','Reviews','Google Maps URL','Instagram','Notes']];
+  for (var i = 0; i < leads.length; i++) {
+    var l = leads[i];
+    ws_data.push([l.name, l.category, l.address, l.phone, l.website, l.rating, l.reviews, l.google_maps_url, l.instagram, l.notes]);
+  }
+
+  var wb = XLSX.utils.book_new();
+  var ws = XLSX.utils.aoa_to_sheet(ws_data);
+  ws['!cols'] = [30,20,35,18,35,8,8,40,30,40].map(function(w){return {wch:w};});
+  XLSX.utils.book_append_sheet(wb, ws, 'Leads');
+
+  var keyword = (window._specialKeyword || 'leads').toLowerCase().replace(/[^a-z0-9]/g,'-');
+  var loc = (window._specialLocation || '').toLowerCase().replace(/[^a-z0-9]/g,'-');
+  XLSX.writeFile(wb, keyword + '-' + loc + '-leads.xlsx');
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }

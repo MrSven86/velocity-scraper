@@ -438,11 +438,10 @@ async function scrapeAll(token) {
   const fbUrl = document.getElementById('all-fb') ? document.getElementById('all-fb').value.trim() : '';
 
   if (fbUrl) {
-    promises.push(startActor(token, 'apify~facebook-posts-scraper', {
-      startUrls: [{ url: fbUrl, method: 'GET' }],
+    promises.push(startActor(token, 'apify~facebook-pages-scraper', {
+      startUrls: [{ url: fbUrl }],
       maxPosts: maxPosts,
       maxPostComments: 0,
-      maxReviews: 0,
       scrapeAbout: true,
     }).then(runId => pollRun(token, runId)).then(r => ({ type: 'fb', data: r })).catch(e => ({ type: 'fb', error: e.message })));
   }

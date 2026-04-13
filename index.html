@@ -1293,6 +1293,9 @@ async function scrapeSpecial(token) {
         if (seenNames.has(nameKey)) continue;
         seenNames.add(nameKey);
 
+        var hasWeb = !!(place.website && place.website.trim() !== '');
+        if (noWebsiteOnly && hasWeb) continue;
+
         allLeads.push({
           keyword: keyword,
           name: place.title || '',
@@ -1304,11 +1307,12 @@ async function scrapeSpecial(token) {
           rating: place.totalScore || '',
           reviews: place.reviewsCount || 0,
           google_maps_url: place.url || '',
-          hasWebsite: !!(place.website && place.website.trim() !== ''),
+          hasWebsite: hasWeb,
         });
       }
 
-      setStatus('(' + (i+1) + '/' + keywords.length + ') "' + keyword + '" — ' + (mapsResult || []).length + ' results. Total: ' + allLeads.length, 'info');
+      var skipped = (mapsResult || []).length - allLeads.length;
+      setStatus('(' + (i+1) + '/' + keywords.length + ') "' + keyword + '" — ' + (mapsResult || []).length + ' found, keeping ' + allLeads.length + ' without website', 'info');
 
     } catch(err) {
       setStatus('(' + (i+1) + '/' + keywords.length + ') Error on "' + keyword + '": ' + err.message, 'error');

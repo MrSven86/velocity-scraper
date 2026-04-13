@@ -181,19 +181,30 @@
     </div>
 
     <div id="special-fields" class="hidden">
-      <div class="tip">Find businesses worldwide by keyword. Example: search "swedish" in "Buenos Aires" to find Swedish-owned businesses. Outputs an Excel file with names, addresses, phones, websites, Maps URLs.</div>
-      <label>Keyword to search</label>
-      <input type="text" id="special-keyword" placeholder="swedish, svenska, sweden, nordic..." />
-      <label>City / Country</label>
-      <input type="text" id="special-location" placeholder="Buenos Aires, Argentina" />
-      <label>Business type (optional)</label>
-      <input type="text" id="special-type" placeholder="restaurant, salon, contractor, company..." />
-      <label>Max results</label>
+      <div class="tip">Paste up to 20 search queries — one per line. Each query searches Google Maps and returns up to 500 results. Example: "peluquería Palermo Buenos Aires" or "dentista Belgrano". Downloads Excel with only businesses that have NO website.</div>
+      <label>Search queries (one per line, max 20)</label>
+      <textarea id="special-keywords" rows="8" placeholder="peluquería Palermo Buenos Aires
+dentista Belgrano Buenos Aires
+pintor Recoleta Buenos Aires
+restaurante San Telmo Buenos Aires
+estudio contable Caballito Buenos Aires" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <div style="display:flex;gap:12px;margin-top:4px;">
+        <span id="keyword-count" style="font-size:12px;color:#999;">0 / 20 queries</span>
+      </div>
+      <label>Max results per keyword</label>
       <select id="special-max">
-        <option value="20" selected>20 businesses</option>
+        <option value="20">20 businesses</option>
         <option value="50">50 businesses</option>
         <option value="100">100 businesses</option>
+        <option value="200">200 businesses</option>
+        <option value="500" selected>500 businesses</option>
       </select>
+      <div style="margin-top:8px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;">
+          <input type="checkbox" id="special-no-website" checked style="width:18px;height:18px;" />
+          Only show businesses WITHOUT a website
+        </label>
+      </div>
     </div>
 
     <div id="status" class="status info hidden"></div>
@@ -1235,153 +1246,170 @@ function reset() {
 }
 
 async function scrapeSpecial(token) {
-  var keyword = document.getElementById('special-keyword').value.trim();
-  var location = document.getElementById('special-location').value.trim();
-  var bizType = document.getElementById('special-type').value.trim();
+  var raw = document.getElementById('special-keywords').value.trim();
   var maxResults = parseInt(document.getElementById('special-max').value);
+  var noWebsiteOnly = document.getElementById('special-no-website').checked;
 
-  if (!keyword) throw new Error('Please enter a keyword to search');
-  if (!location) throw new Error('Please enter a city or country');
+  if (!raw) throw new Error('Please paste at least one search query');
 
-  var query = [keyword, bizType, location].filter(Boolean).join(' ');
-  setStatus('Searching Google Maps for: ' + query + '...', 'info');
-  setProgress(10);
+  var keywords = raw.split('\n').map(function(k){return k.trim();}).filter(function(k){return k.length > 0;}).slice(0, 20);
+  if (keywords.length === 0) throw new Error('Please paste at least one search query');
 
-  var gmapsInput = {
-    searchStringsArray: [query],
-    maxCrawledPlacesPerSearch: maxResults,
-    language: 'en',
-    maxReviews: 0,
-    maxImages: 0,
-    scrapeReviewerInfo: false,
-  };
+  setStatus('Starting search for ' + keywords.length + ' queries, up to ' + maxResults + ' results each...', 'info');
+  setProgress(5);
 
-  var searchInput = {
-    queries: keyword + ' ' + bizType + ' ' + location,
-    resultsPerPage: 10,
-    maxPagesPerQuery: 1,
-  };
+  var allLeads = [];
+  var seenNames = new Set();
 
-  setStatus('Running Maps + Google Search in parallel...', 'info');
-  setProgress(20);
+  for (var i = 0; i < keywords.length; i++) {
+    var keyword = keywords[i];
+    var pct = Math.round(5 + (i / keywords.length) * 85);
+    setStatus('(' + (i+1) + '/' + keywords.length + ') Searching: ' + keyword + '...', 'info');
+    setProgress(pct);
 
-  var results = await Promise.all([
-    startActor(token, 'compass~crawler-google-places', gmapsInput)
-      .then(function(id) { return pollRun(token, id); })
-      .catch(function() { return []; }),
-    startActor(token, 'apify~google-search-scraper', searchInput)
-      .then(function(id) { return pollRun(token, id); })
-      .catch(function() { return []; }),
-  ]);
+    try {
+      var gmapsInput = {
+        searchStringsArray: [keyword],
+        maxCrawledPlacesPerSearch: maxResults,
+        language: 'es',
+        maxReviews: 0,
+        maxImages: 0,
+        scrapeReviewerInfo: false,
+      };
 
-  var mapsResult = results[0];
-  var searchResult = results[1];
+      var runId = await startActor(token, 'compass~crawler-google-places', gmapsInput);
+      var mapsResult = await pollRun(token, runId);
 
-  setProgress(90);
-  setStatus('Processing results...', 'info');
+      for (var j = 0; j < (mapsResult || []).length; j++) {
+        var place = mapsResult[j];
+        var nameKey = (place.title || '').toLowerCase().trim();
+        if (seenNames.has(nameKey)) continue;
+        seenNames.add(nameKey);
 
-  var leads = [];
-  var existingNames = new Set();
+        allLeads.push({
+          keyword: keyword,
+          name: place.title || '',
+          category: place.categoryName || '',
+          address: place.address || '',
+          phone: place.phone || '',
+          website: place.website || '',
+          email: place.email || '',
+          rating: place.totalScore || '',
+          reviews: place.reviewsCount || 0,
+          google_maps_url: place.url || '',
+          hasWebsite: !!(place.website && place.website.trim() !== ''),
+        });
+      }
 
-  for (var i = 0; i < (mapsResult || []).length; i++) {
-    var place = mapsResult[i];
-    leads.push({
-      name: place.title || '',
-      category: place.categoryName || '',
-      address: place.address || '',
-      phone: place.phone || '',
-      website: place.website || '',
-      rating: place.totalScore || '',
-      reviews: place.reviewsCount || 0,
-      google_maps_url: place.url || '',
-      instagram: '',
-      notes: '',
-    });
-    existingNames.add((place.title || '').toLowerCase());
-  }
+      setStatus('(' + (i+1) + '/' + keywords.length + ') "' + keyword + '" — ' + (mapsResult || []).length + ' results. Total: ' + allLeads.length, 'info');
 
-  for (var j = 0; j < (searchResult || []).length; j++) {
-    var page = searchResult[j];
-    for (var k = 0; k < (page.organicResults || []).length; k++) {
-      var r = page.organicResults[k];
-      if (!r.title || existingNames.has(r.title.toLowerCase())) continue;
-      if (r.url && (r.url.includes('instagram.com') || r.url.includes('facebook.com') || r.url.includes('google.com'))) continue;
-      leads.push({
-        name: r.title,
-        category: '',
-        address: '',
-        phone: '',
-        website: r.url || '',
-        rating: '',
-        reviews: '',
-        google_maps_url: '',
-        instagram: '',
-        notes: r.description || '',
-      });
-      existingNames.add(r.title.toLowerCase());
+    } catch(err) {
+      setStatus('(' + (i+1) + '/' + keywords.length + ') Error on "' + keyword + '": ' + err.message, 'error');
     }
   }
 
+  setProgress(95);
+  setStatus('Processing ' + allLeads.length + ' total results...', 'info');
+
+  var noWebCount = allLeads.filter(function(l){return !l.hasWebsite;}).length;
+  var withWebCount = allLeads.filter(function(l){return l.hasWebsite;}).length;
+
   setProgress(100);
-  window._specialLeads = leads;
-  window._specialKeyword = keyword;
-  window._specialLocation = location;
-  renderSpecial(leads, keyword, location);
+  window._specialLeads = allLeads;
+  window._specialNoWebsite = noWebsiteOnly;
+  renderSpecial(allLeads, noWebsiteOnly);
 }
 
-function renderSpecial(leads, keyword, location) {
+function renderSpecial(leads, noWebsiteOnly) {
   document.getElementById('setup-card').classList.add('hidden');
   document.getElementById('results-card').classList.remove('hidden');
 
+  var noWebCount = leads.filter(function(l){return !l.hasWebsite;}).length;
+  var withWebCount = leads.filter(function(l){return l.hasWebsite;}).length;
+  var withPhone = leads.filter(function(l){return l.phone;}).length;
+  var displayed = noWebsiteOnly ? leads.filter(function(l){return !l.hasWebsite;}) : leads;
+
   document.getElementById('stats').innerHTML =
-    '<div class="stat"><div class="stat-num">' + leads.length + '</div><div class="stat-label">businesses found</div></div>' +
-    '<div class="stat"><div class="stat-num">' + leads.filter(function(l){return l.phone;}).length + '</div><div class="stat-label">with phone</div></div>' +
-    '<div class="stat"><div class="stat-num">' + leads.filter(function(l){return l.website;}).length + '</div><div class="stat-label">with website</div></div>';
+    '<div class="stat"><div class="stat-num">' + leads.length + '</div><div class="stat-label">total found</div></div>' +
+    '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + noWebCount + '</div><div class="stat-label">NO website</div></div>' +
+    '<div class="stat"><div class="stat-num">' + withWebCount + '</div><div class="stat-label">has website</div></div>' +
+    '<div class="stat"><div class="stat-num">' + withPhone + '</div><div class="stat-label">with phone</div></div>';
 
   document.getElementById('result-tabs').innerHTML =
-    '<button class="tab active" onclick="switchTab(\'posts\',this)">Results (' + leads.length + ')</button>';
+    '<button class="tab ' + (noWebsiteOnly ? 'active' : '') + '" onclick="filterSpecial(true,this)">No website (' + noWebCount + ')</button>' +
+    '<button class="tab ' + (!noWebsiteOnly ? 'active' : '') + '" onclick="filterSpecial(false,this)">All (' + leads.length + ')</button>';
 
-  if (leads.length === 0) {
+  if (displayed.length === 0) {
     document.getElementById('pane-posts').innerHTML = '<p style="color:#999;font-size:13px">No results found. Try different keywords.</p>';
   } else {
-    document.getElementById('pane-posts').innerHTML = leads.map(function(l) {
+    document.getElementById('pane-posts').innerHTML = displayed.map(function(l) {
+      var webBadge = l.hasWebsite
+        ? '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;background:#fee2e2;color:#991b1b;">Has website</span>'
+        : '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;background:#dcfce7;color:#166534;font-weight:600;">NO WEBSITE — LEAD</span>';
       return '<div class="review" style="margin-bottom:10px;">' +
-        '<div class="rev-header"><span class="rev-name">' + l.name + '</span>' +
-        '<span style="font-size:12px;color:#999;">' + (l.rating ? '&#9733; ' + l.rating + ' (' + l.reviews + ')' : '') + '</span></div>' +
+        '<div class="rev-header"><span class="rev-name">' + l.name + '</span> ' + webBadge +
+        '<span style="font-size:12px;color:#999;margin-left:8px;">' + (l.rating ? '&#9733; ' + l.rating + ' (' + l.reviews + ')' : '') + '</span></div>' +
+        '<div style="font-size:12px;color:#888;margin-top:2px;">' + l.keyword + '</div>' +
         '<div style="font-size:13px;color:#555;margin-top:4px;">' + l.category + '</div>' +
         '<div style="font-size:13px;color:#444;margin-top:2px;">' + l.address + '</div>' +
         (l.phone ? '<div style="font-size:13px;color:#1a56db;margin-top:2px;">&#128222; ' + l.phone + '</div>' : '') +
         (l.website ? '<div style="font-size:12px;margin-top:2px;"><a href="' + l.website + '" target="_blank" style="color:#1a56db;">' + l.website + '</a></div>' : '') +
-        (l.notes ? '<div style="font-size:12px;color:#999;margin-top:4px;">' + l.notes + '</div>' : '') +
+        (l.google_maps_url ? '<div style="font-size:11px;margin-top:2px;"><a href="' + l.google_maps_url + '" target="_blank" style="color:#999;">Maps link</a></div>' : '') +
         '</div>';
     }).join('');
   }
 
+  document.getElementById('pane-posts').classList.remove('hidden');
+
   document.getElementById('dl-btns').innerHTML =
-    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlLeadsExcel()">Download Excel</button>';
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlLeadsExcel()">Download Excel (' + displayed.length + ' leads)</button>';
+}
+
+function filterSpecial(noWebOnly, btn) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  if (btn) btn.classList.add('active');
+  window._specialNoWebsite = noWebOnly;
+  renderSpecial(window._specialLeads, noWebOnly);
 }
 
 function dlLeadsExcel() {
   var leads = window._specialLeads;
+  var noWebOnly = window._specialNoWebsite;
   if (!leads || !leads.length) return;
 
-  var ws_data = [['Name','Category','Address','Phone','Website','Rating','Reviews','Google Maps URL','Instagram','Notes']];
-  for (var i = 0; i < leads.length; i++) {
-    var l = leads[i];
-    ws_data.push([l.name, l.category, l.address, l.phone, l.website, l.rating, l.reviews, l.google_maps_url, l.instagram, l.notes]);
+  var filtered = noWebOnly ? leads.filter(function(l){return !l.hasWebsite;}) : leads;
+
+  var ws_data = [['Search Query','Name','Category','Address','Phone','Email','Website','Rating','Reviews','Google Maps URL','Has Website']];
+  for (var i = 0; i < filtered.length; i++) {
+    var l = filtered[i];
+    ws_data.push([l.keyword, l.name, l.category, l.address, l.phone, l.email, l.website, l.rating, l.reviews, l.google_maps_url, l.hasWebsite ? 'Yes' : 'No']);
   }
 
   var wb = XLSX.utils.book_new();
   var ws = XLSX.utils.aoa_to_sheet(ws_data);
-  ws['!cols'] = [30,20,35,18,35,8,8,40,30,40].map(function(w){return {wch:w};});
+  ws['!cols'] = [30,30,20,35,18,25,35,8,8,40,12].map(function(w){return {wch:w};});
   XLSX.utils.book_append_sheet(wb, ws, 'Leads');
 
-  var keyword = (window._specialKeyword || 'leads').toLowerCase().replace(/[^a-z0-9]/g,'-');
-  var loc = (window._specialLocation || '').toLowerCase().replace(/[^a-z0-9]/g,'-');
-  XLSX.writeFile(wb, keyword + '-' + loc + '-leads.xlsx');
+  var dateStr = new Date().toISOString().slice(0,10);
+  var suffix = noWebOnly ? '-no-website' : '-all';
+  XLSX.writeFile(wb, 'leads-' + dateStr + suffix + '.xlsx');
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Keyword counter for Special Research
+(function() {
+  var ta = document.getElementById('special-keywords');
+  var counter = document.getElementById('keyword-count');
+  if (ta && counter) {
+    ta.addEventListener('input', function() {
+      var lines = ta.value.split('\n').map(function(k){return k.trim();}).filter(function(k){return k.length > 0;});
+      var count = Math.min(lines.length, 20);
+      counter.textContent = count + ' / 20 queries';
+      counter.style.color = count >= 20 ? '#dc2626' : '#999';
+    });
+  }
+})();
 </script>
 </body>
 </html>

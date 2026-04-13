@@ -181,13 +181,17 @@
     </div>
 
     <div id="special-fields" class="hidden">
-      <div class="tip">Paste up to 20 search queries — one per line. Each query searches Google Maps and returns up to 500 results. Example: "peluquería Palermo Buenos Aires" or "dentista Belgrano". Downloads Excel with only businesses that have NO website.</div>
+      <div class="tip">Paste up to 20 search queries — one per line. The city/country below is applied to ALL queries. Each query returns up to 500 results. Downloads Excel with only businesses that have NO website.</div>
+      <label>City / Country (applied to all queries)</label>
+      <input type="text" id="special-location" placeholder="Buenos Aires, Argentina" />
       <label>Search queries (one per line, max 20)</label>
-      <textarea id="special-keywords" rows="8" placeholder="peluquería Palermo Buenos Aires
-dentista Belgrano Buenos Aires
-pintor Recoleta Buenos Aires
-restaurante San Telmo Buenos Aires
-estudio contable Caballito Buenos Aires" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <textarea id="special-keywords" rows="8" placeholder="dentista
+peluquería
+pintor
+restaurante
+estudio contable
+clínica dental
+veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
       <div style="display:flex;gap:12px;margin-top:4px;">
         <span id="keyword-count" style="font-size:12px;color:#999;">0 / 20 queries</span>
       </div>
@@ -1247,15 +1251,17 @@ function reset() {
 
 async function scrapeSpecial(token) {
   var raw = document.getElementById('special-keywords').value.trim();
+  var location = document.getElementById('special-location').value.trim();
   var maxResults = parseInt(document.getElementById('special-max').value);
   var noWebsiteOnly = document.getElementById('special-no-website').checked;
 
   if (!raw) throw new Error('Please paste at least one search query');
+  if (!location) throw new Error('Please enter a city / country');
 
   var keywords = raw.split('\n').map(function(k){return k.trim();}).filter(function(k){return k.length > 0;}).slice(0, 20);
   if (keywords.length === 0) throw new Error('Please paste at least one search query');
 
-  setStatus('Starting search for ' + keywords.length + ' queries, up to ' + maxResults + ' results each...', 'info');
+  setStatus('Starting search for ' + keywords.length + ' queries in ' + location + '...', 'info');
   setProgress(5);
 
   var allLeads = [];
@@ -1263,13 +1269,14 @@ async function scrapeSpecial(token) {
 
   for (var i = 0; i < keywords.length; i++) {
     var keyword = keywords[i];
+    var query = keyword + ' ' + location;
     var pct = Math.round(5 + (i / keywords.length) * 85);
-    setStatus('(' + (i+1) + '/' + keywords.length + ') Searching: ' + keyword + '...', 'info');
+    setStatus('(' + (i+1) + '/' + keywords.length + ') Searching: ' + query + '...', 'info');
     setProgress(pct);
 
     try {
       var gmapsInput = {
-        searchStringsArray: [keyword],
+        searchStringsArray: [query],
         maxCrawledPlacesPerSearch: maxResults,
         language: 'es',
         maxReviews: 0,

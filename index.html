@@ -86,6 +86,9 @@
       <button class="mode-btn" id="mode-special" onclick="setMode('special')" style="background:#fff8e1;border-color:#f59e0b;">
         <span class="icon">🌍</span>Special Research
       </button>
+      <button class="mode-btn" id="mode-audit" onclick="setMode('audit')" style="background:#fef2f2;border-color:#ef4444;">
+        <span class="icon">📍</span>GMB Audit
+      </button>
     </div>
 
     <label>Apify API token</label>
@@ -211,6 +214,23 @@ veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-si
       </div>
     </div>
 
+    <div id="audit-fields" class="hidden">
+      <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste a Google Maps URL. The tool scrapes the business profile, then searches for their category keywords near their location. Shows exactly which searches they're INVISIBLE on — the red lines are your sale.</div>
+      <label>Google Maps URL of the business</label>
+      <input type="text" id="audit-url" placeholder="https://maps.google.com/maps/place/Dr+Cifuentes+Fernando/..." />
+      <label>Extra keywords to check (optional, one per line)</label>
+      <textarea id="audit-extra-keywords" rows="4" placeholder="odontólogo Recoleta
+blanqueamiento dental
+ortodoncia
+implantes dentales" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <label>Search radius</label>
+      <select id="audit-radius">
+        <option value="1000">1 km (tight — same block)</option>
+        <option value="2000" selected>2 km (neighborhood)</option>
+        <option value="5000">5 km (wider area)</option>
+      </select>
+    </div>
+
     <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
@@ -238,10 +258,14 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','gmaps','ig','research','fb','special'].forEach(m => {
-    document.getElementById(m + '-fields').classList.toggle('hidden', m !== mode);
-    document.getElementById('mode-' + m).classList.toggle('active', m === mode);
+  ['all','gmaps','ig','research','fb','special','audit'].forEach(m => {
+    var fields = document.getElementById(m + '-fields');
+    if (fields) fields.classList.toggle('hidden', m !== mode);
+    var btn = document.getElementById('mode-' + m);
+    if (btn) btn.classList.toggle('active', m === mode);
   });
+  // Change button text for audit mode
+  document.getElementById('run-btn').innerHTML = mode === 'audit' ? 'Run GMB Audit' : 'Start scraping';
 }
 
 function setStatus(msg, type) {
@@ -425,6 +449,8 @@ async function startScrape() {
       await scrapeFacebook(token);
     } else if (currentMode === 'special') {
       await scrapeSpecial(token);
+    } else if (currentMode === 'audit') {
+      await runGMBAudit(token);
     } else {
       await scrapeResearch(token);
     }
@@ -1407,6 +1433,410 @@ function dlLeadsExcel() {
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// ─── GMB AUDIT ──────────────────────────────────────────────────────────────
+
+async function runGMBAudit(token) {
+  var url = document.getElementById('audit-url').value.trim();
+  var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
+  var radius = parseInt(document.getElementById('audit-radius').value);
+
+  if (!url) throw new Error('Paste a Google Maps URL');
+  if (!url.includes('google.com/maps') && !url.includes('goo.gl')) throw new Error('That doesn\'t look like a Google Maps URL');
+
+  setStatus('Step 1/4 — Scraping the business profile...', 'info');
+  setProgress(10);
+
+  // Step 1: Scrape the target business
+  var gmapsInput = {
+    startUrls: [{ url: url }],
+    maxCrawledPlacesPerSearch: 1,
+    language: 'es',
+    maxReviews: 0,
+    maxImages: 0,
+    scrapeReviewerInfo: false,
+  };
+
+  var runId = await startActor(token, 'compass~crawler-google-places', gmapsInput);
+  var result = await pollRun(token, runId);
+
+  if (!result || result.length === 0) throw new Error('Could not scrape that business. Check the URL.');
+
+  var biz = result[0];
+  var bizName = (biz.title || '').trim();
+  var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
+  var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
+  var bizCategory = biz.categoryName || '';
+  var bizCategories = (biz.categories || []);
+  var bizAddress = biz.address || '';
+  var bizPhone = biz.phone || '';
+  var bizWebsite = biz.website || '';
+  var bizRating = biz.totalScore || 0;
+  var bizReviews = biz.reviewsCount || 0;
+  var bizPhotos = biz.imageCount || biz.imagesCount || 0;
+
+  // Extract city/barrio from address
+  var addressParts = bizAddress.split(',').map(function(s){return s.trim();});
+  var barrio = addressParts.length > 1 ? addressParts[addressParts.length - 3] || addressParts[0] : '';
+  var city = addressParts.length > 1 ? addressParts[addressParts.length - 2] || '' : '';
+
+  setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + '). Building keyword list...', 'info');
+  setProgress(25);
+
+  // Step 2: Generate search keywords
+  var keywords = [];
+
+  // Primary category variations
+  if (bizCategory) {
+    keywords.push(bizCategory.toLowerCase());
+    if (barrio) keywords.push(bizCategory.toLowerCase() + ' ' + barrio);
+    if (city) keywords.push(bizCategory.toLowerCase() + ' ' + city);
+    keywords.push(bizCategory.toLowerCase() + ' cerca de mi');
+  }
+
+  // All secondary categories
+  for (var c = 0; c < bizCategories.length; c++) {
+    var cat = bizCategories[c].toLowerCase();
+    if (cat !== bizCategory.toLowerCase()) {
+      keywords.push(cat);
+      if (barrio) keywords.push(cat + ' ' + barrio);
+    }
+  }
+
+  // Common Spanish dental/medical synonyms based on category
+  var synonymMap = {
+    'dentista': ['odontólogo', 'clínica dental', 'consultorio dental', 'dentista de urgencia', 'limpieza dental', 'blanqueamiento dental', 'ortodoncia', 'implantes dentales'],
+    'peluquería': ['salón de belleza', 'corte de pelo', 'peluquero', 'estilista', 'barbería'],
+    'hair salon': ['peluquería', 'salón de belleza', 'corte de pelo', 'estilista'],
+    'restaurant': ['restaurante', 'comida', 'almuerzo', 'cena'],
+    'restaurante': ['comida', 'almuerzo', 'cena', 'donde comer'],
+    'pintor': ['pintura', 'pintores', 'pinturería'],
+    'plomero': ['plomería', 'destapaciones', 'gasista'],
+    'abogado': ['estudio jurídico', 'abogados', 'asesoría legal'],
+    'contador': ['estudio contable', 'contadores', 'contabilidad'],
+    'veterinaria': ['veterinario', 'clínica veterinaria', 'pet shop'],
+  };
+
+  var catLower = bizCategory.toLowerCase();
+  for (var synKey in synonymMap) {
+    if (catLower.includes(synKey)) {
+      var syns = synonymMap[synKey];
+      for (var s = 0; s < syns.length; s++) {
+        keywords.push(syns[s]);
+        if (barrio) keywords.push(syns[s] + ' ' + barrio);
+      }
+    }
+  }
+
+  // Add user's extra keywords
+  if (extraRaw) {
+    var extras = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
+    for (var e = 0; e < extras.length; e++) {
+      keywords.push(extras[e]);
+    }
+  }
+
+  // Deduplicate
+  var seen = {};
+  var uniqueKeywords = [];
+  for (var k = 0; k < keywords.length; k++) {
+    var kw = keywords[k].trim();
+    if (kw && !seen[kw]) {
+      seen[kw] = true;
+      uniqueKeywords.push(kw);
+    }
+  }
+
+  // Cap at 30 keywords to keep Apify costs reasonable
+  uniqueKeywords = uniqueKeywords.slice(0, 30);
+
+  setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords near ' + bizName + '...', 'info');
+  setProgress(30);
+
+  // Step 3: For each keyword, search Maps near the business and check if they appear
+  var auditResults = [];
+  var bizNameLower = bizName.toLowerCase();
+  // Create variations of the name to match against
+  var bizNameWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
+
+  for (var i = 0; i < uniqueKeywords.length; i++) {
+    var kw = uniqueKeywords[i];
+    var pct = Math.round(30 + (i / uniqueKeywords.length) * 60);
+    setStatus('(' + (i+1) + '/' + uniqueKeywords.length + ') Searching: "' + kw + '"...', 'info');
+    setProgress(pct);
+
+    try {
+      var searchInput = {
+        searchStringsArray: [kw],
+        maxCrawledPlacesPerSearch: 20,
+        language: 'es',
+        maxReviews: 0,
+        maxImages: 0,
+        scrapeReviewerInfo: false,
+      };
+
+      // If we have coordinates, use them for location bias
+      if (bizLat && bizLng) {
+        searchInput.lat = String(bizLat);
+        searchInput.lng = String(bizLng);
+        searchInput.zoom = radius <= 1000 ? 16 : (radius <= 2000 ? 15 : 14);
+      }
+
+      var sRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
+      var searchResults = await pollRun(token, sRunId);
+
+      // Check if our business appears in results
+      var found = false;
+      var position = -1;
+      var competitors = [];
+
+      for (var r = 0; r < (searchResults || []).length; r++) {
+        var place = searchResults[r];
+        var placeName = (place.title || '').toLowerCase();
+
+        // Check if this is our business (fuzzy match)
+        var isMatch = placeName === bizNameLower ||
+          placeName.includes(bizNameLower) ||
+          bizNameLower.includes(placeName);
+
+        // Also check if most words match
+        if (!isMatch && bizNameWords.length > 1) {
+          var matchCount = 0;
+          for (var w = 0; w < bizNameWords.length; w++) {
+            if (placeName.includes(bizNameWords[w])) matchCount++;
+          }
+          if (matchCount >= bizNameWords.length * 0.6) isMatch = true;
+        }
+
+        if (isMatch && !found) {
+          found = true;
+          position = r + 1;
+        } else {
+          competitors.push({
+            name: place.title || '',
+            rating: place.totalScore || 0,
+            reviews: place.reviewsCount || 0,
+            category: place.categoryName || '',
+          });
+        }
+      }
+
+      auditResults.push({
+        keyword: kw,
+        found: found,
+        position: position,
+        totalResults: (searchResults || []).length,
+        topCompetitors: competitors.slice(0, 5),
+      });
+
+    } catch(err) {
+      auditResults.push({
+        keyword: kw,
+        found: false,
+        position: -1,
+        totalResults: 0,
+        topCompetitors: [],
+        error: err.message,
+      });
+    }
+  }
+
+  setProgress(95);
+  setStatus('Step 4/4 — Building report...', 'info');
+
+  // Step 4: Render results
+  window._auditBiz = biz;
+  window._auditResults = auditResults;
+  window._auditBarrio = barrio;
+  renderAudit(biz, auditResults, barrio);
+}
+
+function renderAudit(biz, results, barrio) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  var visible = results.filter(function(r){return r.found;}).length;
+  var invisible = results.filter(function(r){return !r.found;}).length;
+
+  var bizName = biz.title || '';
+  var bizCategory = biz.categoryName || '';
+  var bizRating = biz.totalScore || 0;
+  var bizReviews = biz.reviewsCount || 0;
+  var bizPhotos = biz.imageCount || biz.imagesCount || 0;
+  var bizWebsite = biz.website || '';
+
+  // Stats
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + results.length + '</div><div class="stat-label">keywords checked</div></div>' +
+    '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + visible + '</div><div class="stat-label">VISIBLE</div></div>' +
+    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + invisible + '</div><div class="stat-label">INVISIBLE</div></div>' +
+    '<div class="stat"><div class="stat-num">' + bizReviews + '</div><div class="stat-label">reviews</div></div>';
+
+  // Tabs
+  document.getElementById('result-tabs').innerHTML =
+    '<button class="tab active" onclick="switchAuditTab(\'all\',this)">All (' + results.length + ')</button>' +
+    '<button class="tab" onclick="switchAuditTab(\'invisible\',this)">Invisible (' + invisible + ')</button>' +
+    '<button class="tab" onclick="switchAuditTab(\'visible\',this)">Visible (' + visible + ')</button>' +
+    '<button class="tab" onclick="switchAuditTab(\'profile\',this)">Profile</button>';
+
+  renderAuditKeywords(results, 'all');
+
+  document.getElementById('dl-btns').innerHTML =
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAuditExcel()">Download Audit Report (Excel)</button>';
+}
+
+function switchAuditTab(filter, btn) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  if (btn) btn.classList.add('active');
+
+  if (filter === 'profile') {
+    renderAuditProfile();
+    return;
+  }
+
+  var results = window._auditResults;
+  var filtered = results;
+  if (filter === 'invisible') filtered = results.filter(function(r){return !r.found;});
+  if (filter === 'visible') filtered = results.filter(function(r){return r.found;});
+  renderAuditKeywords(filtered, filter);
+}
+
+function renderAuditKeywords(results, filter) {
+  var html = '';
+
+  // Sort: invisible first, then by keyword
+  var sorted = results.slice().sort(function(a,b) {
+    if (a.found !== b.found) return a.found ? 1 : -1;
+    return a.keyword.localeCompare(b.keyword);
+  });
+
+  for (var i = 0; i < sorted.length; i++) {
+    var r = sorted[i];
+    var badge = r.found
+      ? '<span style="display:inline-block;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:600;background:#dcfce7;color:#166534;">VISIBLE #' + r.position + '</span>'
+      : '<span style="display:inline-block;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;background:#fef2f2;color:#dc2626;">❌ INVISIBLE</span>';
+
+    var compHtml = '';
+    if (!r.found && r.topCompetitors.length > 0) {
+      compHtml = '<div style="margin-top:6px;padding:8px 12px;background:#f9fafb;border-radius:6px;font-size:12px;">' +
+        '<div style="color:#999;margin-bottom:4px;">Who shows up instead:</div>';
+      for (var c = 0; c < Math.min(3, r.topCompetitors.length); c++) {
+        var comp = r.topCompetitors[c];
+        compHtml += '<div style="color:#444;">#' + (c+1) + ' ' + comp.name + ' <span style="color:#999;">★ ' + comp.rating + ' (' + comp.reviews + ' reviews)</span></div>';
+      }
+      compHtml += '</div>';
+    }
+
+    html += '<div class="review" style="margin-bottom:8px;border-left:4px solid ' + (r.found ? '#16a34a' : '#dc2626') + ';">' +
+      '<div class="rev-header" style="display:flex;justify-content:space-between;align-items:center;">' +
+      '<span class="rev-name" style="font-size:15px;">"' + r.keyword + '"</span> ' + badge +
+      '</div>' +
+      compHtml +
+      '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+
+  // Hide other panes
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
+}
+
+function renderAuditProfile() {
+  var biz = window._auditBiz;
+  if (!biz) return;
+
+  var checks = [];
+
+  // Profile checks based on the GMB onboarding checklist
+  checks.push({label: 'Primary category', value: biz.categoryName || 'NOT SET', ok: !!(biz.categoryName)});
+  checks.push({label: 'Secondary categories', value: (biz.categories || []).length + ' categories', ok: (biz.categories || []).length >= 3});
+  checks.push({label: 'Business description', value: biz.description ? (biz.description.length + ' chars') : 'EMPTY', ok: !!(biz.description && biz.description.length > 50)});
+  checks.push({label: 'Phone number', value: biz.phone || 'MISSING', ok: !!(biz.phone)});
+  checks.push({label: 'Website', value: biz.website || 'MISSING', ok: !!(biz.website)});
+  checks.push({label: 'Business hours', value: (biz.openingHours && biz.openingHours.length > 0) ? 'Set' : 'NOT SET', ok: !!(biz.openingHours && biz.openingHours.length > 0)});
+  checks.push({label: 'Rating', value: biz.totalScore ? (biz.totalScore + ' ★') : 'No rating', ok: biz.totalScore >= 4.0});
+  checks.push({label: 'Reviews', value: (biz.reviewsCount || 0) + ' reviews', ok: (biz.reviewsCount || 0) >= 20});
+  checks.push({label: 'Photos', value: (biz.imageCount || biz.imagesCount || 0) + ' photos', ok: (biz.imageCount || biz.imagesCount || 0) >= 10});
+
+  var okCount = checks.filter(function(c){return c.ok;}).length;
+  var html = '<div style="margin-bottom:12px;"><strong>' + biz.title + '</strong> — ' + okCount + '/' + checks.length + ' checks passed</div>';
+
+  for (var i = 0; i < checks.length; i++) {
+    var c = checks[i];
+    var icon = c.ok ? '✅' : '❌';
+    html += '<div style="padding:8px 12px;margin-bottom:4px;background:' + (c.ok ? '#f0fdf4' : '#fef2f2') + ';border-radius:6px;display:flex;justify-content:space-between;align-items:center;">' +
+      '<span>' + icon + ' ' + c.label + '</span>' +
+      '<span style="font-size:13px;color:' + (c.ok ? '#166534' : '#dc2626') + ';font-weight:600;">' + c.value + '</span>' +
+      '</div>';
+  }
+
+  // Show categories
+  if (biz.categories && biz.categories.length > 0) {
+    html += '<div style="margin-top:12px;padding:10px;background:#f9fafb;border-radius:6px;">' +
+      '<div style="font-weight:600;margin-bottom:4px;">Categories on profile:</div>';
+    for (var j = 0; j < biz.categories.length; j++) {
+      html += '<span style="display:inline-block;padding:2px 8px;margin:2px;background:#e5e7eb;border-radius:4px;font-size:12px;">' + biz.categories[j] + '</span>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+}
+
+function dlAuditExcel() {
+  var biz = window._auditBiz;
+  var results = window._auditResults;
+  if (!biz || !results) return;
+
+  var wb = XLSX.utils.book_new();
+
+  // Sheet 1: Keyword visibility
+  var kwData = [['Keyword', 'Visible', 'Position', 'Top Competitor #1', 'Rating #1', 'Reviews #1', 'Top Competitor #2', 'Rating #2', 'Reviews #2']];
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var c1 = r.topCompetitors[0] || {};
+    var c2 = r.topCompetitors[1] || {};
+    kwData.push([
+      r.keyword,
+      r.found ? 'YES' : 'NO',
+      r.found ? r.position : 'N/A',
+      c1.name || '', c1.rating || '', c1.reviews || '',
+      c2.name || '', c2.rating || '', c2.reviews || '',
+    ]);
+  }
+  var ws1 = XLSX.utils.aoa_to_sheet(kwData);
+  ws1['!cols'] = [30,8,8,30,8,10,30,8,10].map(function(w){return {wch:w};});
+  XLSX.utils.book_append_sheet(wb, ws1, 'Keyword Visibility');
+
+  // Sheet 2: Profile summary
+  var profData = [
+    ['Business Name', biz.title || ''],
+    ['Address', biz.address || ''],
+    ['Phone', biz.phone || ''],
+    ['Website', biz.website || ''],
+    ['Primary Category', biz.categoryName || ''],
+    ['All Categories', (biz.categories || []).join(', ')],
+    ['Rating', biz.totalScore || ''],
+    ['Reviews', biz.reviewsCount || 0],
+    ['Photos', biz.imageCount || biz.imagesCount || 0],
+    ['', ''],
+    ['VISIBILITY SCORE', ''],
+    ['Keywords checked', results.length],
+    ['Visible', results.filter(function(r){return r.found;}).length],
+    ['Invisible', results.filter(function(r){return !r.found;}).length],
+    ['Visibility %', Math.round(results.filter(function(r){return r.found;}).length / results.length * 100) + '%'],
+  ];
+  var ws2 = XLSX.utils.aoa_to_sheet(profData);
+  ws2['!cols'] = [{wch:25},{wch:50}];
+  XLSX.utils.book_append_sheet(wb, ws2, 'Profile');
+
+  var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
+  XLSX.writeFile(wb, 'gmb-audit-' + name + '.xlsx');
+}
 
 // Keyword counter for Special Research
 (function() {

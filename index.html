@@ -1514,58 +1514,22 @@ async function runGMBAudit(token) {
   setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + ')' + (barrio ? ' in ' + barrio : '') + '. Building keyword list...', 'info');
   setProgress(25);
 
-  // Step 2: Generate REAL search keywords — what actual customers would type
+  // Step 2: Generate 3-5 CORE search keywords only
   var keywords = [];
 
-  // Primary category: bare, with barrio, with "cerca de mi"
   if (bizCategory) {
     var cat = bizCategory.toLowerCase();
-    keywords.push(cat);
-    keywords.push(cat + ' cerca de mi');
-    if (barrio) keywords.push(cat + ' ' + barrio);
+    keywords.push(cat);                          // "plomero"
+    keywords.push(cat + ' cerca de mi');         // "plomero cerca de mi"
+    if (barrio) keywords.push(cat + ' ' + barrio); // "plomero Villa Devoto"
   }
 
-  // Secondary categories: bare and with barrio
-  for (var c = 0; c < bizCategories.length; c++) {
-    var secCat = bizCategories[c].toLowerCase();
-    if (secCat !== bizCategory.toLowerCase()) {
-      keywords.push(secCat);
-      if (barrio) keywords.push(secCat + ' ' + barrio);
-    }
-  }
-
-  // Spanish synonyms based on category
-  var synonymMap = {
-    'dentista': ['odontólogo', 'clínica dental', 'consultorio dental'],
-    'peluquería': ['salón de belleza', 'peluquero', 'estilista'],
-    'hair salon': ['peluquería', 'salón de belleza', 'estilista'],
-    'restaurant': ['restaurante', 'donde comer'],
-    'restaurante': ['donde comer', 'comida'],
-    'pintor': ['pinturería', 'pintores'],
-    'plomero': ['plomería', 'destapaciones'],
-    'abogado': ['estudio jurídico', 'asesoría legal'],
-    'contador': ['estudio contable', 'contadores'],
-    'veterinaria': ['veterinario', 'clínica veterinaria'],
-  };
-
-  var catLower = bizCategory.toLowerCase();
-  for (var synKey in synonymMap) {
-    if (catLower.includes(synKey)) {
-      var syns = synonymMap[synKey];
-      for (var s = 0; s < syns.length; s++) {
-        keywords.push(syns[s]);
-        keywords.push(syns[s] + ' cerca de mi');
-        if (barrio) keywords.push(syns[s] + ' ' + barrio);
-      }
-    }
-  }
-
-  // Add user's extra keywords (bare + with barrio + cerca de mi)
+  // Add user's extra keywords (bare + with barrio)
   if (extraRaw) {
     var extras = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
     for (var e = 0; e < extras.length; e++) {
       keywords.push(extras[e]);
-      if (barrio && !extras[e].includes(barrio.toLowerCase())) {
+      if (barrio && !extras[e].toLowerCase().includes(barrio.toLowerCase())) {
         keywords.push(extras[e] + ' ' + barrio);
       }
     }
@@ -1581,8 +1545,6 @@ async function runGMBAudit(token) {
       uniqueKeywords.push(kw);
     }
   }
-
-  uniqueKeywords = uniqueKeywords.slice(0, 25);
 
   setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords in ONE search (this is fast)...', 'info');
   setProgress(30);
@@ -1833,49 +1795,95 @@ function renderAuditProfile() {
 function dlAuditExcel() {
   var biz = window._auditBiz;
   var results = window._auditResults;
+  var barrio = window._auditBarrio || '';
   if (!biz || !results) return;
 
   var wb = XLSX.utils.book_new();
+  var visible = results.filter(function(r){return r.found;}).length;
+  var invisible = results.filter(function(r){return !r.found;}).length;
+  var visPct = Math.round(visible / results.length * 100);
 
-  // Sheet 1: Keyword visibility
-  var kwData = [['Keyword', 'Visible', 'Position', 'Top Competitor #1', 'Rating #1', 'Reviews #1', 'Top Competitor #2', 'Rating #2', 'Reviews #2']];
+  // Single clean sheet — everything on one page
+  var data = [];
+
+  // Header block
+  data.push(['VISIBILITY REPORT']);
+  data.push(['']);
+  data.push(['Business', biz.title || '']);
+  data.push(['Address', biz.address || '']);
+  data.push(['Phone', biz.phone || '']);
+  data.push(['Website', biz.website || 'NO WEBSITE']);
+  data.push(['Category', biz.categoryName || '']);
+  data.push(['Rating', (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' reviews)']);
+  data.push(['Photos', (biz.imageCount || biz.imagesCount || 0)]);
+  data.push(['']);
+
+  // Visibility score
+  data.push(['VISIBILITY SCORE', visPct + '%', '', visible + ' of ' + results.length + ' searches']);
+  data.push(['']);
+
+  // Keyword results table
+  data.push(['SEARCH', 'VISIBLE?', 'POSITION', 'WHO SHOWS UP INSTEAD', '', 'THEIR RATING', 'THEIR REVIEWS']);
+
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     var c1 = r.topCompetitors[0] || {};
     var c2 = r.topCompetitors[1] || {};
-    kwData.push([
+
+    data.push([
       r.keyword,
       r.found ? 'YES' : 'NO',
-      r.found ? r.position : 'N/A',
-      c1.name || '', c1.rating || '', c1.reviews || '',
-      c2.name || '', c2.rating || '', c2.reviews || '',
+      r.found ? '#' + r.position : '—',
+      c1.name || '',
+      '',
+      c1.rating || '',
+      c1.reviews || '',
     ]);
-  }
-  var ws1 = XLSX.utils.aoa_to_sheet(kwData);
-  ws1['!cols'] = [30,8,8,30,8,10,30,8,10].map(function(w){return {wch:w};});
-  XLSX.utils.book_append_sheet(wb, ws1, 'Keyword Visibility');
 
-  // Sheet 2: Profile summary
-  var profData = [
-    ['Business Name', biz.title || ''],
-    ['Address', biz.address || ''],
-    ['Phone', biz.phone || ''],
-    ['Website', biz.website || ''],
-    ['Primary Category', biz.categoryName || ''],
-    ['All Categories', (biz.categories || []).join(', ')],
-    ['Rating', biz.totalScore || ''],
-    ['Reviews', biz.reviewsCount || 0],
-    ['Photos', biz.imageCount || biz.imagesCount || 0],
-    ['', ''],
-    ['VISIBILITY SCORE', ''],
-    ['Keywords checked', results.length],
-    ['Visible', results.filter(function(r){return r.found;}).length],
-    ['Invisible', results.filter(function(r){return !r.found;}).length],
-    ['Visibility %', Math.round(results.filter(function(r){return r.found;}).length / results.length * 100) + '%'],
+    // Add second competitor on next row if invisible
+    if (!r.found && c2.name) {
+      data.push([
+        '',
+        '',
+        '',
+        c2.name,
+        '',
+        c2.rating,
+        c2.reviews,
+      ]);
+    }
+  }
+
+  data.push(['']);
+  data.push(['']);
+
+  // Quick profile checks
+  data.push(['PROFILE CHECKLIST']);
+  var photos = biz.imageCount || biz.imagesCount || 0;
+  var reviews = biz.reviewsCount || 0;
+  var cats = (biz.categories || []).length;
+  var hasDesc = biz.description && biz.description.length > 50;
+  var hasHours = biz.openingHours && biz.openingHours.length > 0;
+
+  data.push(['Photos', photos, photos >= 10 ? 'OK' : 'NEEDS MORE — competitors have 30+']);
+  data.push(['Reviews', reviews, reviews >= 20 ? 'OK' : 'NEEDS MORE — ask every customer']);
+  data.push(['Categories', cats, cats >= 3 ? 'OK' : 'ADD MORE — competitors use 3-5']);
+  data.push(['Description', hasDesc ? 'Written' : 'EMPTY', hasDesc ? 'OK' : 'WRITE ONE — 750 chars max']);
+  data.push(['Website', biz.website ? 'Has one' : 'MISSING', biz.website ? '' : 'NEEDS A WEBSITE']);
+  data.push(['Hours set', hasHours ? 'Yes' : 'NO', hasHours ? 'OK' : 'SET HOURS']);
+
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [
+    {wch: 28},  // A — label/keyword
+    {wch: 10},  // B — value/visible
+    {wch: 10},  // C — position
+    {wch: 40},  // D — competitor name
+    {wch: 2},   // E — spacer
+    {wch: 8},   // F — rating
+    {wch: 10},  // G — reviews
   ];
-  var ws2 = XLSX.utils.aoa_to_sheet(profData);
-  ws2['!cols'] = [{wch:25},{wch:50}];
-  XLSX.utils.book_append_sheet(wb, ws2, 'Profile');
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Report');
 
   var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
   XLSX.writeFile(wb, 'gmb-audit-' + name + '.xlsx');

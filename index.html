@@ -1451,29 +1451,30 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─── GMB AUDIT ──────────────────────────────────────────────────────────────
 
-async function auditOneBusiness(token, url, mainKeyword, extraKeywords, radius) {
-  // Scrape profile
-  var gmapsInput = {
-    startUrls: [{ url: url }],
-    maxCrawledPlacesPerSearch: 1,
-    language: 'es',
-    maxReviews: 0,
-    maxImages: 0,
-    scrapeReviewerInfo: false,
-  };
-  var runId = await startActor(token, 'compass~crawler-google-places', gmapsInput);
-  var result = await pollRun(token, runId);
-  if (!result || result.length === 0) return null;
+function checkVisibility(bizName, kwResults) {
+  var bizNameLower = bizName.toLowerCase();
+  var bizWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
+  var found = false, position = -1, comps = [];
 
-  var biz = result[0];
-  if (!biz.url) biz.url = url;
-  var bizName = (biz.title || '').trim();
+  for (var j = 0; j < kwResults.length; j++) {
+    var pn = (kwResults[j].title || '').toLowerCase();
+    var match = pn === bizNameLower || pn.includes(bizNameLower) || bizNameLower.includes(pn);
+    if (!match && bizWords.length > 1) {
+      var mc = 0;
+      for (var w = 0; w < bizWords.length; w++) { if (pn.includes(bizWords[w])) mc++; }
+      if (mc >= bizWords.length * 0.6) match = true;
+    }
+    if (match && !found) { found = true; position = j + 1; }
+    else { comps.push({name: kwResults[j].title||'', rating: kwResults[j].totalScore||0, reviews: kwResults[j].reviewsCount||0}); }
+  }
+  return {found: found, position: position, topCompetitors: comps.slice(0,3)};
+}
+
+async function detectBarrio(biz) {
+  var barrio = biz.neighborhood || biz.subLocality || '';
   var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
   var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
-  var bizCategory = biz.categoryName || '';
 
-  // Auto-detect barrio
-  var barrio = biz.neighborhood || biz.subLocality || '';
   if (!barrio && bizLat && bizLng) {
     try {
       var geoResp = await fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + bizLat + '&lon=' + bizLng + '&zoom=16&addressdetails=1', {
@@ -1485,94 +1486,19 @@ async function auditOneBusiness(token, url, mainKeyword, extraKeywords, radius) 
         barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
       }
     } catch(e) {}
+    // Nominatim rate limit: 1 req/sec
+    await sleep(1100);
   }
   if (!barrio) {
     var addrParts = (biz.address || '').split(',').map(function(s){return s.trim();});
     for (var ap = 1; ap < addrParts.length - 1; ap++) {
       var part = addrParts[ap].replace(/^[A-Z]\d{4}\s*/, '').trim();
       if (part && !part.includes('Cdad') && !part.includes('Autónoma') && !part.includes('Argentina') && !part.includes('Buenos Aires') && part.length > 2 && part.length < 30) {
-        barrio = part;
-        break;
+        barrio = part; break;
       }
     }
   }
-  biz._barrio = barrio;
-
-  // Build keywords — use mainKeyword (user input) instead of Google's category
-  var keywords = [];
-  var cat = mainKeyword || bizCategory.toLowerCase();
-  if (cat) {
-    keywords.push(cat);
-    keywords.push(cat + ' cerca de mi');
-    if (barrio) keywords.push(cat + ' ' + barrio);
-  }
-  for (var e = 0; e < extraKeywords.length; e++) {
-    keywords.push(extraKeywords[e]);
-    if (barrio && !extraKeywords[e].toLowerCase().includes(barrio.toLowerCase())) {
-      keywords.push(extraKeywords[e] + ' ' + barrio);
-    }
-  }
-  // Dedup
-  var seen = {};
-  var uniq = [];
-  for (var k = 0; k < keywords.length; k++) {
-    var kw = keywords[k].trim();
-    if (kw && !seen[kw]) { seen[kw] = true; uniq.push(kw); }
-  }
-
-  // Search all keywords in one run
-  var searchInput = {
-    searchStringsArray: uniq,
-    maxCrawledPlacesPerSearch: 20,
-    language: 'es',
-    maxReviews: 0, maxImages: 0, scrapeReviewerInfo: false,
-  };
-  if (bizLat && bizLng) {
-    searchInput.lat = String(bizLat);
-    searchInput.lng = String(bizLng);
-    searchInput.zoom = radius <= 1000 ? 16 : (radius <= 2000 ? 15 : 14);
-  }
-
-  var sRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
-  var allResults = await pollRun(token, sRunId);
-
-  // Group by keyword
-  var byKw = {};
-  for (var ki = 0; ki < uniq.length; ki++) byKw[uniq[ki]] = [];
-  for (var ri = 0; ri < (allResults || []).length; ri++) {
-    var p = allResults[ri];
-    var ss = (p.searchString || '').toLowerCase().trim();
-    if (byKw[ss]) { byKw[ss].push(p); }
-    else {
-      for (var kki = 0; kki < uniq.length; kki++) {
-        if (ss.includes(uniq[kki]) || uniq[kki].includes(ss)) { byKw[uniq[kki]].push(p); break; }
-      }
-    }
-  }
-
-  // Check visibility
-  var bizNameLower = bizName.toLowerCase();
-  var bizWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
-  var auditResults = [];
-
-  for (var i = 0; i < uniq.length; i++) {
-    var kwRes = byKw[uniq[i]] || [];
-    var found = false, position = -1, comps = [];
-    for (var j = 0; j < kwRes.length; j++) {
-      var pn = (kwRes[j].title || '').toLowerCase();
-      var match = pn === bizNameLower || pn.includes(bizNameLower) || bizNameLower.includes(pn);
-      if (!match && bizWords.length > 1) {
-        var mc = 0;
-        for (var w = 0; w < bizWords.length; w++) { if (pn.includes(bizWords[w])) mc++; }
-        if (mc >= bizWords.length * 0.6) match = true;
-      }
-      if (match && !found) { found = true; position = j + 1; }
-      else { comps.push({name: kwRes[j].title||'', rating: kwRes[j].totalScore||0, reviews: kwRes[j].reviewsCount||0}); }
-    }
-    auditResults.push({keyword: uniq[i], found: found, position: position, topCompetitors: comps.slice(0,3)});
-  }
-
-  return {biz: biz, results: auditResults, barrio: barrio};
+  return barrio;
 }
 
 async function runGMBAudit(token) {
@@ -1592,33 +1518,170 @@ async function runGMBAudit(token) {
     extraKeywords = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
   }
 
+  // ═══ STEP 1: Scrape ALL profiles in ONE Apify run ═══
+  setStatus('Step 1/3 — Scraping ' + urls.length + ' business profiles in one batch...', 'info');
+  setProgress(10);
+
+  var startUrls = urls.map(function(u) { return {url: u}; });
+  var profileInput = {
+    startUrls: startUrls,
+    maxCrawledPlacesPerSearch: 1,
+    language: 'es',
+    maxReviews: 0,
+    maxImages: 0,
+    scrapeReviewerInfo: false,
+  };
+
+  var profileRunId = await startActor(token, 'compass~crawler-google-places', profileInput);
+  setStatus('Step 1/3 — Waiting for ' + urls.length + ' profiles...', 'info');
+  setProgress(20);
+  var allProfiles = await pollRun(token, profileRunId);
+
+  if (!allProfiles || allProfiles.length === 0) throw new Error('Could not scrape any profiles. Check URLs.');
+
+  setStatus('Step 1/3 — Got ' + allProfiles.length + ' profiles. Detecting neighborhoods...', 'info');
+  setProgress(35);
+
+  // ═══ STEP 2: Detect barrios + build keywords for each business ═══
+  var businesses = [];
+  var allSearchKeywords = []; // master list of ALL keywords across all businesses
+  var bizKeywordMap = []; // tracks which keywords belong to which business
+
+  for (var i = 0; i < allProfiles.length; i++) {
+    var biz = allProfiles[i];
+    if (!biz.url) biz.url = urls[i] || '';
+
+    setStatus('Step 2/3 — Detecting barrio for ' + (biz.title || 'business ' + (i+1)) + '...', 'info');
+
+    var barrio = await detectBarrio(biz);
+    biz._barrio = barrio;
+
+    // Build keywords for this business
+    var cat = mainKeyword || (biz.categoryName || '').toLowerCase();
+    var keywords = [];
+    if (cat) {
+      keywords.push(cat);
+      keywords.push(cat + ' cerca de mi');
+      if (barrio) keywords.push(cat + ' ' + barrio);
+    }
+    for (var e = 0; e < extraKeywords.length; e++) {
+      keywords.push(extraKeywords[e]);
+      if (barrio && !extraKeywords[e].toLowerCase().includes(barrio.toLowerCase())) {
+        keywords.push(extraKeywords[e] + ' ' + barrio);
+      }
+    }
+    // Dedup within this business
+    var seen = {};
+    var uniq = [];
+    for (var k = 0; k < keywords.length; k++) {
+      var kw = keywords[k].trim();
+      if (kw && !seen[kw]) { seen[kw] = true; uniq.push(kw); }
+    }
+
+    // Add to master list (with location bias info)
+    var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
+    var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
+
+    businesses.push({
+      biz: biz,
+      barrio: barrio,
+      keywords: uniq,
+      lat: bizLat,
+      lng: bizLng,
+    });
+
+    // Track keywords — we'll search them all at once but need to match back
+    for (var ki = 0; ki < uniq.length; ki++) {
+      allSearchKeywords.push(uniq[ki]);
+      bizKeywordMap.push({bizIndex: i, keyword: uniq[ki], lat: bizLat, lng: bizLng});
+    }
+  }
+
+  // Dedup the master keyword list (many businesses might share "plomero cerca de mi")
+  // But we need location-specific searches, so we tag keywords with a biz index
+  // Strategy: group keywords by unique lat/lng, run one search per location cluster
+
+  // For simplicity and speed: run ALL unique keywords in one big run
+  // using the FIRST business's coordinates as the center
+  // This works well when all businesses are in the same city (which they are)
+  var uniqueAllKw = [];
+  var seenKw = {};
+  for (var ak = 0; ak < allSearchKeywords.length; ak++) {
+    if (!seenKw[allSearchKeywords[ak]]) {
+      seenKw[allSearchKeywords[ak]] = true;
+      uniqueAllKw.push(allSearchKeywords[ak]);
+    }
+  }
+
+  // ═══ STEP 3: Search ALL keywords in ONE Apify run ═══
+  setStatus('Step 3/3 — Searching ' + uniqueAllKw.length + ' keywords in one batch...', 'info');
+  setProgress(50);
+
+  var searchInput = {
+    searchStringsArray: uniqueAllKw,
+    maxCrawledPlacesPerSearch: 20,
+    language: 'es',
+    maxReviews: 0, maxImages: 0, scrapeReviewerInfo: false,
+  };
+
+  // Use first business coordinates as search center
+  if (businesses[0] && businesses[0].lat && businesses[0].lng) {
+    searchInput.lat = String(businesses[0].lat);
+    searchInput.lng = String(businesses[0].lng);
+    searchInput.zoom = radius <= 1000 ? 16 : (radius <= 2000 ? 15 : 14);
+  }
+
+  var searchRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
+  setStatus('Step 3/3 — Apify is searching ' + uniqueAllKw.length + ' keywords...', 'info');
+  setProgress(65);
+  var allSearchResults = await pollRun(token, searchRunId);
+
+  setStatus('Step 3/3 — Processing results...', 'info');
+  setProgress(90);
+
+  // Group search results by keyword
+  var resultsByKw = {};
+  for (var rk = 0; rk < uniqueAllKw.length; rk++) resultsByKw[uniqueAllKw[rk]] = [];
+  for (var sr = 0; sr < (allSearchResults || []).length; sr++) {
+    var place = allSearchResults[sr];
+    var ss = (place.searchString || '').toLowerCase().trim();
+    if (resultsByKw[ss]) { resultsByKw[ss].push(place); }
+    else {
+      for (var fk = 0; fk < uniqueAllKw.length; fk++) {
+        if (ss.includes(uniqueAllKw[fk]) || uniqueAllKw[fk].includes(ss)) {
+          resultsByKw[uniqueAllKw[fk]].push(place); break;
+        }
+      }
+    }
+  }
+
+  // ═══ Build audit results per business ═══
   var allAudits = [];
 
-  for (var i = 0; i < urls.length; i++) {
-    setStatus('Business ' + (i+1) + '/' + urls.length + ' — scraping & checking...', 'info');
-    setProgress(Math.round((i / urls.length) * 90));
+  for (var bi = 0; bi < businesses.length; bi++) {
+    var b = businesses[bi];
+    var bizName = (b.biz.title || '').trim();
+    var auditResults = [];
 
-    try {
-      var audit = await auditOneBusiness(token, urls[i], mainKeyword, extraKeywords, radius);
-      if (audit) {
-        allAudits.push(audit);
-        setStatus('✓ Business ' + (i+1) + '/' + urls.length + ' — ' + audit.biz.title + ' (' + audit.results.filter(function(r){return r.found;}).length + '/' + audit.results.length + ' visible)', 'info');
-      } else {
-        setStatus('✗ Business ' + (i+1) + '/' + urls.length + ' — could not scrape. URL: ' + urls[i].slice(0,60) + '...', 'error');
-      }
-    } catch(err) {
-      setStatus('✗ Business ' + (i+1) + '/' + urls.length + ' — error: ' + err.message + ' URL: ' + urls[i].slice(0,60), 'error');
+    for (var kwi = 0; kwi < b.keywords.length; kwi++) {
+      var kw = b.keywords[kwi];
+      var kwResults = resultsByKw[kw] || [];
+      var vis = checkVisibility(bizName, kwResults);
+      auditResults.push({
+        keyword: kw,
+        found: vis.found,
+        position: vis.position,
+        topCompetitors: vis.topCompetitors,
+      });
     }
-    // Small delay between businesses to avoid rate limiting
-    if (i < urls.length - 1) await sleep(2000);
+
+    allAudits.push({biz: b.biz, results: auditResults, barrio: b.barrio});
   }
 
   setProgress(95);
-
-  if (allAudits.length === 0) throw new Error('No businesses could be scraped. Check your URLs.');
+  setStatus('Done! ' + allAudits.length + ' businesses audited.', 'info');
 
   window._allAudits = allAudits;
-  // Always use bulk render/download — even for 1 business
   renderBulkAudit(allAudits);
   setProgress(100);
 }

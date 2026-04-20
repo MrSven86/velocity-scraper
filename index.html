@@ -1484,18 +1484,14 @@ async function detectBarrio(biz) {
         var geoData = await geoResp.json();
         var addr = geoData.address || {};
         barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
-        // Clean Nominatim output for Buenos Aires barrios
-        // Input examples: "Almagro, Comuna 5" | "Barrio Norte, Recoleta, Comuna 2" | "Palermo, Comuna 14" | "Recoleta"
-        // Output should be: "Almagro" | "Recoleta" | "Palermo" | "Recoleta"
-        if (barrio && barrio.includes(',')) {
-          barrio = barrio
-            .split(',')
-            .map(function(s) { return s.trim(); })
-            .filter(function(s) { return s && !/comuna/i.test(s) && !/^\d+$/.test(s); })
-            .map(function(s) { return s.replace(/^barrio\s+/i, ''); })
-            .pop() || barrio.split(',')[0].trim();
-        }
-        barrio = (barrio || '').replace(/^barrio\s+/i, '').trim();
+        // Always clean — strip "Comuna X", "Barrio X", take first recognizable name
+        barrio = barrio
+          .split(',')
+          .map(function(s) { return s.trim(); })
+          .filter(function(s) { return s && !/comuna/i.test(s) && !/^\d+$/.test(s); })
+          .map(function(s) { return s.replace(/^barrio\s+/i, ''); })
+          [0] || '';
+        barrio = barrio.trim();
       }
     } catch(e) {}
     // Nominatim rate limit: 1 req/sec

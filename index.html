@@ -1439,7 +1439,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function runGMBAudit(token) {
   var url = document.getElementById('audit-url').value.trim();
-  var barrio = document.getElementById('audit-barrio').value.trim();
+  var manualBarrio = document.getElementById('audit-barrio').value.trim();
   var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
   var radius = parseInt(document.getElementById('audit-radius').value);
 
@@ -1470,8 +1470,48 @@ async function runGMBAudit(token) {
   var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
   var bizCategory = biz.categoryName || '';
   var bizCategories = (biz.categories || []);
+  var bizAddress = biz.address || '';
 
-  setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + '). Building keyword list...', 'info');
+  // Step 1b: Auto-detect barrio
+  var barrio = manualBarrio;
+  if (!barrio) {
+    // Try to get neighborhood from the scraper result
+    barrio = biz.neighborhood || biz.subLocality || '';
+  }
+  if (!barrio && bizLat && bizLng) {
+    // Reverse geocode using free Nominatim API
+    setStatus('Step 1b — Detecting neighborhood...', 'info');
+    try {
+      var geoResp = await fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + bizLat + '&lon=' + bizLng + '&zoom=16&addressdetails=1', {
+        headers: {'User-Agent': 'VelocityScraper/1.0'}
+      });
+      if (geoResp.ok) {
+        var geoData = await geoResp.json();
+        var addr = geoData.address || {};
+        barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
+      }
+    } catch(e) { /* silent fail */ }
+  }
+  if (!barrio) {
+    // Last resort: try to parse from address string
+    // Pattern: "Street, POSTCODE City, Country" — try to find known barrio names
+    var addrParts = bizAddress.split(',').map(function(s){return s.trim();});
+    // Skip first (street) and last (country), check middle parts
+    for (var ap = 1; ap < addrParts.length - 1; ap++) {
+      var part = addrParts[ap].replace(/^[A-Z]\d{4}\s*/, '').trim(); // strip postal code
+      if (part && !part.includes('Cdad') && !part.includes('Autónoma') && !part.includes('Argentina') && !part.includes('Buenos Aires') && part.length > 2 && part.length < 30) {
+        barrio = part;
+        break;
+      }
+    }
+  }
+
+  // Update the barrio field so the user can see what was detected
+  if (barrio) {
+    document.getElementById('audit-barrio').value = barrio;
+  }
+
+  setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + ')' + (barrio ? ' in ' + barrio : '') + '. Building keyword list...', 'info');
   setProgress(25);
 
   // Step 2: Generate REAL search keywords — what actual customers would type
@@ -1514,12 +1554,13 @@ async function runGMBAudit(token) {
       var syns = synonymMap[synKey];
       for (var s = 0; s < syns.length; s++) {
         keywords.push(syns[s]);
+        keywords.push(syns[s] + ' cerca de mi');
         if (barrio) keywords.push(syns[s] + ' ' + barrio);
       }
     }
   }
 
-  // Add user's extra keywords (bare + with barrio)
+  // Add user's extra keywords (bare + with barrio + cerca de mi)
   if (extraRaw) {
     var extras = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
     for (var e = 0; e < extras.length; e++) {

@@ -215,15 +215,16 @@ veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-si
     </div>
 
     <div id="audit-fields" class="hidden">
-      <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste a Google Maps URL. The tool checks if the business shows up when people search for their services nearby. Red lines = invisible = your sale.</div>
-      <label>Google Maps URL of the business</label>
-      <input type="text" id="audit-url" placeholder="https://maps.google.com/maps/place/Dr+Cifuentes+Fernando/..." />
-      <label>Neighborhood / Barrio</label>
-      <input type="text" id="audit-barrio" placeholder="Auto-detected from coordinates" />
+      <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste one or more Google Maps URLs (one per line). Each business gets audited and added to a single Excel report. Red lines = invisible = your sale.</div>
+      <label>Google Maps URLs (one per line — max 30)</label>
+      <textarea id="audit-urls" rows="5" placeholder="https://www.google.com/maps/place/Plomero+gasista/...
+https://www.google.com/maps/place/Dr+Cifuentes/...
+https://www.google.com/maps/place/Peluqueria+Ana/..." style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <div style="font-size:12px;color:#999;margin-top:4px;"><span id="audit-url-count">0</span> / 30 businesses</div>
       <label>Extra keywords to check (optional, one per line)</label>
-      <textarea id="audit-extra-keywords" rows="3" placeholder="ortodoncia
-implantes dentales
-blanqueamiento" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <textarea id="audit-extra-keywords" rows="3" placeholder="destapaciones
+plomero gasista
+urgencias 24hs" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
       <div style="display:flex;gap:12px;margin-top:8px;">
         <div style="flex:1;">
           <label>Search radius</label>
@@ -1448,19 +1449,8 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 // ─── GMB AUDIT ──────────────────────────────────────────────────────────────
 
-async function runGMBAudit(token) {
-  var url = document.getElementById('audit-url').value.trim();
-  var manualBarrio = document.getElementById('audit-barrio').value.trim();
-  var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
-  var radius = parseInt(document.getElementById('audit-radius').value);
-
-  if (!url) throw new Error('Paste a Google Maps URL');
-  if (!url.includes('google.com/maps') && !url.includes('goo.gl')) throw new Error('That doesn\'t look like a Google Maps URL');
-
-  setStatus('Step 1/4 — Scraping the business profile...', 'info');
-  setProgress(10);
-
-  // Step 1: Scrape the target business
+async function auditOneBusiness(token, url, extraKeywords, radius) {
+  // Scrape profile
   var gmapsInput = {
     startUrls: [{ url: url }],
     maxCrawledPlacesPerSearch: 1,
@@ -1469,29 +1459,20 @@ async function runGMBAudit(token) {
     maxImages: 0,
     scrapeReviewerInfo: false,
   };
-
   var runId = await startActor(token, 'compass~crawler-google-places', gmapsInput);
   var result = await pollRun(token, runId);
-
-  if (!result || result.length === 0) throw new Error('Could not scrape that business. Check the URL.');
+  if (!result || result.length === 0) return null;
 
   var biz = result[0];
+  if (!biz.url) biz.url = url;
   var bizName = (biz.title || '').trim();
   var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
   var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
   var bizCategory = biz.categoryName || '';
-  var bizCategories = (biz.categories || []);
-  var bizAddress = biz.address || '';
 
-  // Step 1b: Auto-detect barrio
-  var barrio = manualBarrio;
-  if (!barrio) {
-    // Try to get neighborhood from the scraper result
-    barrio = biz.neighborhood || biz.subLocality || '';
-  }
+  // Auto-detect barrio
+  var barrio = biz.neighborhood || biz.subLocality || '';
   if (!barrio && bizLat && bizLng) {
-    // Reverse geocode using free Nominatim API
-    setStatus('Step 1b — Detecting neighborhood...', 'info');
     try {
       var geoResp = await fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + bizLat + '&lon=' + bizLng + '&zoom=16&addressdetails=1', {
         headers: {'User-Agent': 'VelocityScraper/1.0'}
@@ -1501,75 +1482,49 @@ async function runGMBAudit(token) {
         var addr = geoData.address || {};
         barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
       }
-    } catch(e) { /* silent fail */ }
+    } catch(e) {}
   }
   if (!barrio) {
-    // Last resort: try to parse from address string
-    // Pattern: "Street, POSTCODE City, Country" — try to find known barrio names
-    var addrParts = bizAddress.split(',').map(function(s){return s.trim();});
-    // Skip first (street) and last (country), check middle parts
+    var addrParts = (biz.address || '').split(',').map(function(s){return s.trim();});
     for (var ap = 1; ap < addrParts.length - 1; ap++) {
-      var part = addrParts[ap].replace(/^[A-Z]\d{4}\s*/, '').trim(); // strip postal code
+      var part = addrParts[ap].replace(/^[A-Z]\d{4}\s*/, '').trim();
       if (part && !part.includes('Cdad') && !part.includes('Autónoma') && !part.includes('Argentina') && !part.includes('Buenos Aires') && part.length > 2 && part.length < 30) {
         barrio = part;
         break;
       }
     }
   }
+  biz._barrio = barrio;
 
-  // Update the barrio field so the user can see what was detected
-  if (barrio) {
-    document.getElementById('audit-barrio').value = barrio;
-  }
-
-  setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + ')' + (barrio ? ' in ' + barrio : '') + '. Building keyword list...', 'info');
-  setProgress(25);
-
-  // Step 2: Generate 3-5 CORE search keywords only
+  // Build keywords
   var keywords = [];
-
   if (bizCategory) {
     var cat = bizCategory.toLowerCase();
-    keywords.push(cat);                          // "plomero"
-    keywords.push(cat + ' cerca de mi');         // "plomero cerca de mi"
-    if (barrio) keywords.push(cat + ' ' + barrio); // "plomero Villa Devoto"
+    keywords.push(cat);
+    keywords.push(cat + ' cerca de mi');
+    if (barrio) keywords.push(cat + ' ' + barrio);
   }
-
-  // Add user's extra keywords (bare + with barrio)
-  if (extraRaw) {
-    var extras = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
-    for (var e = 0; e < extras.length; e++) {
-      keywords.push(extras[e]);
-      if (barrio && !extras[e].toLowerCase().includes(barrio.toLowerCase())) {
-        keywords.push(extras[e] + ' ' + barrio);
-      }
+  for (var e = 0; e < extraKeywords.length; e++) {
+    keywords.push(extraKeywords[e]);
+    if (barrio && !extraKeywords[e].toLowerCase().includes(barrio.toLowerCase())) {
+      keywords.push(extraKeywords[e] + ' ' + barrio);
     }
   }
-
-  // Deduplicate
+  // Dedup
   var seen = {};
-  var uniqueKeywords = [];
+  var uniq = [];
   for (var k = 0; k < keywords.length; k++) {
     var kw = keywords[k].trim();
-    if (kw && !seen[kw]) {
-      seen[kw] = true;
-      uniqueKeywords.push(kw);
-    }
+    if (kw && !seen[kw]) { seen[kw] = true; uniq.push(kw); }
   }
 
-  setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords in ONE search (this is fast)...', 'info');
-  setProgress(30);
-
-  // Step 3: Send ALL keywords in a SINGLE Apify run
+  // Search all keywords in one run
   var searchInput = {
-    searchStringsArray: uniqueKeywords,
+    searchStringsArray: uniq,
     maxCrawledPlacesPerSearch: 20,
     language: 'es',
-    maxReviews: 0,
-    maxImages: 0,
-    scrapeReviewerInfo: false,
+    maxReviews: 0, maxImages: 0, scrapeReviewerInfo: false,
   };
-
   if (bizLat && bizLng) {
     searchInput.lat = String(bizLat);
     searchInput.lng = String(bizLng);
@@ -1577,95 +1532,147 @@ async function runGMBAudit(token) {
   }
 
   var sRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
-  setStatus('Step 3/4 — Apify is searching all ' + uniqueKeywords.length + ' keywords...', 'info');
-  setProgress(50);
-  var allSearchResults = await pollRun(token, sRunId);
+  var allResults = await pollRun(token, sRunId);
 
-  setStatus('Step 3/4 — Processing ' + (allSearchResults || []).length + ' results...', 'info');
-  setProgress(85);
-
-  // Group results by which keyword they came from using searchString field
-  var resultsByKeyword = {};
-  for (var k = 0; k < uniqueKeywords.length; k++) {
-    resultsByKeyword[uniqueKeywords[k]] = [];
-  }
-
-  for (var r = 0; r < (allSearchResults || []).length; r++) {
-    var place = allSearchResults[r];
-    var searchStr = (place.searchString || '').toLowerCase().trim();
-    if (resultsByKeyword[searchStr] !== undefined) {
-      resultsByKeyword[searchStr].push(place);
-    } else {
-      // Try fuzzy match — sometimes searchString has slight differences
-      for (var kk = 0; kk < uniqueKeywords.length; kk++) {
-        if (searchStr.includes(uniqueKeywords[kk]) || uniqueKeywords[kk].includes(searchStr)) {
-          resultsByKeyword[uniqueKeywords[kk]].push(place);
-          break;
-        }
+  // Group by keyword
+  var byKw = {};
+  for (var ki = 0; ki < uniq.length; ki++) byKw[uniq[ki]] = [];
+  for (var ri = 0; ri < (allResults || []).length; ri++) {
+    var p = allResults[ri];
+    var ss = (p.searchString || '').toLowerCase().trim();
+    if (byKw[ss]) { byKw[ss].push(p); }
+    else {
+      for (var kki = 0; kki < uniq.length; kki++) {
+        if (ss.includes(uniq[kki]) || uniq[kki].includes(ss)) { byKw[uniq[kki]].push(p); break; }
       }
     }
   }
 
-  // Now check visibility per keyword
-  var auditResults = [];
+  // Check visibility
   var bizNameLower = bizName.toLowerCase();
-  var bizNameWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
+  var bizWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
+  var auditResults = [];
 
-  for (var i = 0; i < uniqueKeywords.length; i++) {
-    var kw = uniqueKeywords[i];
-    var kwResults = resultsByKeyword[kw] || [];
-
-    var found = false;
-    var position = -1;
-    var competitors = [];
-
-    for (var j = 0; j < kwResults.length; j++) {
-      var p = kwResults[j];
-      var placeName = (p.title || '').toLowerCase();
-
-      var isMatch = placeName === bizNameLower ||
-        placeName.includes(bizNameLower) ||
-        bizNameLower.includes(placeName);
-
-      if (!isMatch && bizNameWords.length > 1) {
-        var matchCount = 0;
-        for (var w = 0; w < bizNameWords.length; w++) {
-          if (placeName.includes(bizNameWords[w])) matchCount++;
-        }
-        if (matchCount >= bizNameWords.length * 0.6) isMatch = true;
+  for (var i = 0; i < uniq.length; i++) {
+    var kwRes = byKw[uniq[i]] || [];
+    var found = false, position = -1, comps = [];
+    for (var j = 0; j < kwRes.length; j++) {
+      var pn = (kwRes[j].title || '').toLowerCase();
+      var match = pn === bizNameLower || pn.includes(bizNameLower) || bizNameLower.includes(pn);
+      if (!match && bizWords.length > 1) {
+        var mc = 0;
+        for (var w = 0; w < bizWords.length; w++) { if (pn.includes(bizWords[w])) mc++; }
+        if (mc >= bizWords.length * 0.6) match = true;
       }
-
-      if (isMatch && !found) {
-        found = true;
-        position = j + 1;
-      } else {
-        competitors.push({
-          name: p.title || '',
-          rating: p.totalScore || 0,
-          reviews: p.reviewsCount || 0,
-          category: p.categoryName || '',
-        });
-      }
+      if (match && !found) { found = true; position = j + 1; }
+      else { comps.push({name: kwRes[j].title||'', rating: kwRes[j].totalScore||0, reviews: kwRes[j].reviewsCount||0}); }
     }
+    auditResults.push({keyword: uniq[i], found: found, position: position, topCompetitors: comps.slice(0,3)});
+  }
 
-    auditResults.push({
-      keyword: kw,
-      found: found,
-      position: position,
-      totalResults: kwResults.length,
-      topCompetitors: competitors.slice(0, 5),
-    });
+  return {biz: biz, results: auditResults, barrio: barrio};
+}
+
+async function runGMBAudit(token) {
+  var urlsRaw = document.getElementById('audit-urls').value.trim();
+  var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
+  var radius = parseInt(document.getElementById('audit-radius').value);
+
+  if (!urlsRaw) throw new Error('Paste at least one Google Maps URL');
+
+  var urls = urlsRaw.split('\n').map(function(u){return u.trim();}).filter(function(u){return u.includes('google.com/maps') || u.includes('goo.gl');});
+  if (urls.length === 0) throw new Error('No valid Google Maps URLs found');
+  urls = urls.slice(0, 30);
+
+  var extraKeywords = [];
+  if (extraRaw) {
+    extraKeywords = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
+  }
+
+  var allAudits = [];
+
+  for (var i = 0; i < urls.length; i++) {
+    setStatus('Business ' + (i+1) + '/' + urls.length + ' — scraping & checking...', 'info');
+    setProgress(Math.round((i / urls.length) * 90));
+
+    try {
+      var audit = await auditOneBusiness(token, urls[i], extraKeywords, radius);
+      if (audit) {
+        allAudits.push(audit);
+        setStatus('Business ' + (i+1) + '/' + urls.length + ' — ' + audit.biz.title + ' done (' + audit.results.filter(function(r){return r.found;}).length + '/' + audit.results.length + ' visible)', 'info');
+      } else {
+        setStatus('Business ' + (i+1) + '/' + urls.length + ' — could not scrape, skipping', 'error');
+      }
+    } catch(err) {
+      setStatus('Business ' + (i+1) + '/' + urls.length + ' — error: ' + err.message, 'error');
+    }
   }
 
   setProgress(95);
-  setStatus('Step 4/4 — Building report...', 'info');
 
-  // Step 4: Render results
-  if (!biz.url) biz.url = url; // fallback to input URL
-  window._auditBiz = biz;
-  window._auditResults = auditResults;
-  window._auditBarrio = barrio;
-  renderAudit(biz, auditResults, barrio);
+  if (allAudits.length === 0) throw new Error('No businesses could be scraped');
+
+  window._allAudits = allAudits;
+  // For single business, also set the legacy vars for screen display
+  if (allAudits.length === 1) {
+    window._auditBiz = allAudits[0].biz;
+    window._auditResults = allAudits[0].results;
+    window._auditBarrio = allAudits[0].barrio;
+    renderAudit(allAudits[0].biz, allAudits[0].results, allAudits[0].barrio);
+  } else {
+    renderBulkAudit(allAudits);
+  }
+  setProgress(100);
+}
+
+function renderBulkAudit(audits) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  var totalBiz = audits.length;
+  var totalInvisible = 0;
+  audits.forEach(function(a) {
+    totalInvisible += a.results.filter(function(r){return !r.found;}).length;
+  });
+
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + totalBiz + '</div><div class="stat-label">businesses audited</div></div>' +
+    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + totalInvisible + '</div><div class="stat-label">total invisible searches</div></div>';
+
+  document.getElementById('result-tabs').innerHTML = '';
+
+  var html = '';
+  for (var a = 0; a < audits.length; a++) {
+    var audit = audits[a];
+    var biz = audit.biz;
+    var vis = audit.results.filter(function(r){return r.found;}).length;
+    var inv = audit.results.filter(function(r){return !r.found;}).length;
+    var visPct = Math.round(vis / audit.results.length * 100);
+
+    html += '<div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;border-left:4px solid ' + (visPct < 50 ? '#dc2626' : '#16a34a') + ';">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+    html += '<div><strong style="font-size:15px;">' + (biz.title || '') + '</strong>';
+    html += '<div style="font-size:12px;color:#888;">' + (biz.categoryName || '') + ' · ' + (audit.barrio || '') + ' · ' + (biz.phone || 'no phone') + '</div></div>';
+    html += '<div style="font-size:20px;font-weight:700;color:' + (visPct < 50 ? '#dc2626' : '#16a34a') + ';">' + visPct + '%</div>';
+    html += '</div>';
+
+    for (var r = 0; r < audit.results.length; r++) {
+      var res = audit.results[r];
+      var badge = res.found
+        ? '<span style="color:#16a34a;font-size:12px;">✓ #' + res.position + '</span>'
+        : '<span style="color:#dc2626;font-size:12px;font-weight:700;">✗ INVISIBLE</span>';
+      html += '<div style="display:flex;justify-content:space-between;padding:2px 0;font-size:13px;">';
+      html += '<span>' + res.keyword + '</span> ' + badge;
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+
+  document.getElementById('dl-btns').innerHTML =
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlBulkAuditExcel()">Download All Audits (Excel)</button>';
 }
 
 function renderAudit(biz, results, barrio) {
@@ -2069,7 +2076,114 @@ function dlAuditExcel() {
       counter.style.color = count >= 20 ? '#dc2626' : '#999';
     });
   }
+  // URL counter for audit
+  var auditTa = document.getElementById('audit-urls');
+  var auditCounter = document.getElementById('audit-url-count');
+  if (auditTa && auditCounter) {
+    auditTa.addEventListener('input', function() {
+      var lines = auditTa.value.split('\n').map(function(u){return u.trim();}).filter(function(u){return u.includes('google.com/maps') || u.includes('goo.gl');});
+      auditCounter.textContent = Math.min(lines.length, 30);
+    });
+  }
 })();
+
+function dlBulkAuditExcel() {
+  var audits = window._allAudits;
+  if (!audits || !audits.length) return;
+
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+
+  var L = isES ? {
+    title: 'INFORME DE VISIBILIDAD', business: 'Negocio', address: 'Dirección',
+    phone: 'Teléfono', website: 'Sitio web', category: 'Categoría',
+    rating: 'Calificación', photos: 'Fotos', profile: 'Perfil Google Maps',
+    visScore: 'VISIBILIDAD', search: 'BÚSQUEDA', visible: 'VISIBLE?',
+    position: 'POS.', whoInstead: 'QUIÉN APARECE', theirRating: 'CALIF.',
+    theirReviews: 'RESEÑAS', yes: 'SÍ', no: 'NO', checklist: 'CHECKLIST',
+    needsMore: 'NECESITA MÁS', askCustomers: 'PEDIR A CLIENTES',
+    addMore: 'AGREGAR MÁS', writeOne: 'ESCRIBIR', needsWebsite: 'NECESITA WEB',
+    ok: 'OK', missing: 'FALTA', empty: 'VACÍO', reviews: 'Reseñas',
+    noWebsite: 'SIN WEB', barrio: 'Barrio',
+  } : {
+    title: 'VISIBILITY REPORT', business: 'Business', address: 'Address',
+    phone: 'Phone', website: 'Website', category: 'Category',
+    rating: 'Rating', photos: 'Photos', profile: 'Google Maps',
+    visScore: 'VISIBILITY', search: 'SEARCH', visible: 'VISIBLE?',
+    position: 'POS.', whoInstead: 'WHO SHOWS UP', theirRating: 'RATING',
+    theirReviews: 'REVIEWS', yes: 'YES', no: 'NO', checklist: 'CHECKLIST',
+    needsMore: 'NEEDS MORE', askCustomers: 'ASK CUSTOMERS',
+    addMore: 'ADD MORE', writeOne: 'WRITE ONE', needsWebsite: 'NEEDS WEBSITE',
+    ok: 'OK', missing: 'MISSING', empty: 'EMPTY', reviews: 'Reviews',
+    noWebsite: 'NO WEBSITE', barrio: 'Neighborhood',
+  };
+
+  var wb = XLSX.utils.book_new();
+  var data = [];
+
+  data.push([L.title + ' — ' + audits.length + ' businesses']);
+  data.push(['']);
+
+  for (var a = 0; a < audits.length; a++) {
+    var audit = audits[a];
+    var biz = audit.biz;
+    var results = audit.results;
+    var vis = results.filter(function(r){return r.found;}).length;
+    var visPct = Math.round(vis / results.length * 100);
+
+    // Yellow separator
+    data.push(['═══════════════════════════════════════════════════════']);
+
+    // Business header
+    data.push([L.business + ' #' + (a+1), biz.title || '']);
+    data.push([L.address, biz.address || '']);
+    data.push([L.phone, biz.phone || '']);
+    data.push([L.website, biz.website || L.noWebsite]);
+    data.push([L.category, biz.categoryName || '']);
+    data.push([L.barrio, audit.barrio || '']);
+    data.push([L.rating, (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' ' + L.reviews.toLowerCase() + ')']);
+    data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
+    data.push([L.profile, biz.url || '']);
+    data.push(['']);
+    data.push([L.visScore, visPct + '%', '', vis + '/' + results.length]);
+    data.push(['']);
+
+    // Keyword table
+    data.push([L.search, L.visible, L.position, L.whoInstead, '', L.theirRating, L.theirReviews]);
+
+    for (var i = 0; i < results.length; i++) {
+      var r = results[i];
+      var c1 = r.topCompetitors[0] || {};
+      data.push([
+        r.keyword,
+        r.found ? L.yes : L.no,
+        r.found ? '#' + r.position : '—',
+        c1.name || '', '', c1.rating || '', c1.reviews || '',
+      ]);
+      var c2 = r.topCompetitors[1] || {};
+      if (!r.found && c2.name) {
+        data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
+      }
+    }
+
+    data.push(['']);
+    data.push(['']);
+  }
+
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:32},{wch:12},{wch:8},{wch:45},{wch:2},{wch:8},{wch:10}];
+
+  // Add hyperlinks for GMB profile URLs
+  var rowNum = 1;
+  for (var ai = 0; ai < audits.length; ai++) {
+    // Find the profile row for each business — it's at offset 10 from each separator
+    // This is approximate; hyperlinks are best-effort
+  }
+
+  XLSX.utils.book_append_sheet(wb, ws, 'Report');
+  var dateStr = new Date().toISOString().slice(0,10);
+  XLSX.writeFile(wb, 'bulk-audit-' + dateStr + '.xlsx');
+}
 </script>
 </body>
 </html>

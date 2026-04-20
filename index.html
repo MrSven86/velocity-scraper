@@ -244,6 +244,12 @@ urgencias 24hs</textarea>
           </select>
         </div>
       </div>
+      <div style="margin-top:10px;padding:10px;background:#fff8e1;border:1px solid #f59e0b;border-radius:8px;">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;margin:0;">
+          <input type="checkbox" id="audit-advanced" style="width:18px;height:18px;" />
+          <span><strong>Advanced Audit</strong> — single business, deep profile analysis + 20-step GMB checklist (for meetings)</span>
+        </label>
+      </div>
     </div>
 
     <div id="status" class="status info hidden"></div>
@@ -1515,20 +1521,27 @@ async function runGMBAudit(token) {
   var mainKeyword = document.getElementById('audit-main-keyword').value.trim().toLowerCase();
   var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
   var radius = parseInt(document.getElementById('audit-radius').value);
+  var isAdvanced = document.getElementById('audit-advanced').checked;
 
   if (!urlsRaw) throw new Error('Paste at least one Google Maps URL');
 
   var urls = urlsRaw.split('\n').map(function(u){return u.trim();}).filter(function(u){return u.includes('google.com/maps') || u.includes('goo.gl');});
   if (urls.length === 0) throw new Error('No valid Google Maps URLs found');
-  urls = urls.slice(0, 30);
+
+  if (isAdvanced && urls.length > 1) {
+    // Advanced mode only uses first URL
+    urls = [urls[0]];
+  } else {
+    urls = urls.slice(0, 30);
+  }
 
   var extraKeywords = [];
   if (extraRaw) {
     extraKeywords = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
   }
 
-  // ═══ STEP 1: Scrape ALL profiles in ONE Apify run ═══
-  setStatus('Step 1/3 — Scraping ' + urls.length + ' business profiles in one batch...', 'info');
+  // ═══ STEP 1: Scrape profiles ═══
+  setStatus('Step 1/3 — Scraping ' + urls.length + ' business profile(s)' + (isAdvanced ? ' (advanced mode — deep scan)...' : '...'), 'info');
   setProgress(10);
 
   var startUrls = urls.map(function(u) { return {url: u}; });
@@ -1536,7 +1549,7 @@ async function runGMBAudit(token) {
     startUrls: startUrls,
     maxCrawledPlacesPerSearch: 1,
     language: 'es',
-    maxReviews: 0,
+    maxReviews: isAdvanced ? 5 : 0,
     maxImages: 0,
     scrapeReviewerInfo: false,
   };
@@ -1691,7 +1704,11 @@ async function runGMBAudit(token) {
   setStatus('Done! ' + allAudits.length + ' businesses audited.', 'info');
 
   window._allAudits = allAudits;
-  renderBulkAudit(allAudits);
+  if (isAdvanced && allAudits.length === 1) {
+    renderAdvancedAudit(allAudits[0]);
+  } else {
+    renderBulkAudit(allAudits);
+  }
   setProgress(100);
 }
 
@@ -2156,6 +2173,322 @@ function dlAuditExcel() {
     });
   }
 })();
+
+// ═══ ADVANCED AUDIT ═══
+
+function renderAdvancedAudit(audit) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  var biz = audit.biz;
+  var results = audit.results;
+  var vis = results.filter(function(r){return r.found;}).length;
+  var inv = results.filter(function(r){return !r.found;}).length;
+  var visPct = Math.round(vis / results.length * 100);
+
+  // Build 20-step checklist
+  var checks = buildGMBChecklist(biz, results);
+  var passed = checks.filter(function(c){return c.ok;}).length;
+
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + visPct + '%</div><div class="stat-label">visibility</div></div>' +
+    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + inv + '</div><div class="stat-label">invisible</div></div>' +
+    '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + passed + '/' + checks.length + '</div><div class="stat-label">checklist</div></div>' +
+    '<div class="stat"><div class="stat-num">' + (biz.reviewsCount||0) + '</div><div class="stat-label">reviews</div></div>';
+
+  document.getElementById('result-tabs').innerHTML =
+    '<button class="tab active" onclick="switchAdvTab(\'checklist\',this)">GMB Checklist</button>' +
+    '<button class="tab" onclick="switchAdvTab(\'visibility\',this)">Visibility</button>' +
+    '<button class="tab" onclick="switchAdvTab(\'profile\',this)">Profile</button>';
+
+  window._advAudit = audit;
+  window._advChecks = checks;
+  window._auditBiz = biz;
+  window._auditResults = results;
+  renderAdvChecklist(checks);
+
+  document.getElementById('dl-btns').innerHTML =
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAdvancedExcel()">Download Advanced Audit (Excel)</button>';
+}
+
+function switchAdvTab(tab, btn) {
+  document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
+  if (btn) btn.classList.add('active');
+  if (tab === 'checklist') renderAdvChecklist(window._advChecks);
+  else if (tab === 'visibility') renderAdvVisibility(window._advAudit);
+  else if (tab === 'profile') renderAuditProfile();
+}
+
+function buildGMBChecklist(biz, results) {
+  var checks = [];
+  var cats = biz.categories || [];
+  var vis = results.filter(function(r){return r.found;}).length;
+  var photos = biz.imageCount || biz.imagesCount || 0;
+  var reviews = biz.reviewsCount || 0;
+  var hasDesc = biz.description && biz.description.length > 50;
+  var hasHours = biz.openingHours && biz.openingHours.length > 0;
+  var hasWebsite = biz.website && biz.website.trim() !== '';
+  var hasPhone = biz.phone && biz.phone.trim() !== '';
+
+  // Step 1: Profile claimed
+  var isClaimed = !(biz.claimStatus === 'unclaimed' || biz.isAdvertiser === false);
+  checks.push({
+    step: 1, label: 'Perfil reclamado',
+    ok: isClaimed,
+    value: isClaimed ? 'Reclamado' : 'NO RECLAMADO',
+    tip: isClaimed ? '' : 'Reclamar el perfil inmediatamente en business.google.com',
+  });
+
+  // Step 3: Primary category
+  checks.push({
+    step: 3, label: 'Categoría principal',
+    ok: !!(biz.categoryName),
+    value: biz.categoryName || 'NO CONFIGURADA',
+    tip: biz.categoryName ? 'Verificar que coincida con los top 3 competidores' : 'Configurar la categoría principal — es el factor #1 de ranking',
+  });
+
+  // Step 4: Secondary categories
+  checks.push({
+    step: 4, label: 'Categorías secundarias',
+    ok: cats.length >= 3,
+    value: cats.length <= 1 ? 'NINGUNA' : (cats.length - 1) + ' categorías',
+    tip: cats.length >= 3 ? 'OK — ' + cats.join(', ') : 'Agregar categorías secundarias — competidores usan 3-5. Actuales: ' + (cats.join(', ') || 'ninguna'),
+  });
+
+  // Step 5: Business name
+  var nameWords = (biz.title || '').split(/\s+/).length;
+  var hasKeywordStuffing = nameWords > 8;
+  checks.push({
+    step: 5, label: 'Nombre del negocio',
+    ok: !hasKeywordStuffing && !!(biz.title),
+    value: biz.title || 'SIN NOMBRE',
+    tip: hasKeywordStuffing ? 'Posible keyword stuffing — riesgo de suspensión' : 'OK — verificar que refleje el nombre real del negocio',
+  });
+
+  // Step 6: Description
+  checks.push({
+    step: 6, label: 'Descripción',
+    ok: hasDesc,
+    value: hasDesc ? (biz.description.length + ' caracteres') : 'VACÍA',
+    tip: hasDesc ? '' : 'Escribir descripción — 750 caracteres máx, mencionar el barrio naturalmente',
+  });
+
+  // Step 7: Contact info
+  checks.push({
+    step: 7, label: 'Teléfono',
+    ok: hasPhone,
+    value: hasPhone ? biz.phone : 'FALTA',
+    tip: hasPhone ? '' : 'Agregar número de teléfono',
+  });
+  checks.push({
+    step: 7, label: 'Sitio web',
+    ok: hasWebsite,
+    value: hasWebsite ? biz.website : 'SIN SITIO WEB',
+    tip: hasWebsite ? '' : 'Necesita un sitio web — oportunidad de venta',
+  });
+
+  // Step 8: Business hours
+  checks.push({
+    step: 8, label: 'Horarios',
+    ok: hasHours,
+    value: hasHours ? 'Configurados' : 'NO CONFIGURADOS',
+    tip: hasHours ? '' : 'Configurar horarios — Google muestra más negocios con horarios',
+  });
+
+  // Step 11: Photos
+  checks.push({
+    step: 11, label: 'Fotos',
+    ok: photos >= 10,
+    value: photos + ' fotos',
+    tip: photos >= 10 ? '' : 'Subir más fotos — mínimo 10, competidores tienen 30+. Geo-etiquetar en geoimgr.com',
+  });
+
+  // Step 16: Reviews
+  checks.push({
+    step: 16, label: 'Reseñas',
+    ok: reviews >= 20,
+    value: reviews + ' reseñas (' + (biz.totalScore || 0) + ' ★)',
+    tip: reviews >= 20 ? '' : 'Necesita más reseñas — pedir a cada cliente con link de WhatsApp',
+  });
+
+  // Visibility check
+  checks.push({
+    step: 0, label: 'Visibilidad en búsquedas',
+    ok: vis > results.length * 0.5,
+    value: vis + '/' + results.length + ' (' + Math.round(vis/results.length*100) + '%)',
+    tip: vis <= results.length * 0.5 ? 'Invisible en la mayoría de búsquedas — necesita optimización' : '',
+  });
+
+  return checks;
+}
+
+function renderAdvChecklist(checks) {
+  var html = '<div style="margin-bottom:12px;font-size:14px;color:#666;">Checklist basada en los 20 pasos de optimización GMB</div>';
+
+  for (var i = 0; i < checks.length; i++) {
+    var c = checks[i];
+    var icon = c.ok ? '✅' : '❌';
+    var stepLabel = c.step > 0 ? 'Paso ' + c.step + ': ' : '';
+    html += '<div style="padding:10px 12px;margin-bottom:4px;background:' + (c.ok ? '#f0fdf4' : '#fef2f2') + ';border-radius:6px;border-left:4px solid ' + (c.ok ? '#16a34a' : '#dc2626') + ';">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<span style="font-weight:600;">' + icon + ' ' + stepLabel + c.label + '</span>';
+    html += '<span style="font-size:13px;color:' + (c.ok ? '#166534' : '#dc2626') + ';font-weight:600;">' + c.value + '</span>';
+    html += '</div>';
+    if (c.tip) {
+      html += '<div style="font-size:12px;color:#666;margin-top:4px;">→ ' + c.tip + '</div>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
+}
+
+function renderAdvVisibility(audit) {
+  var results = audit.results;
+  var sorted = results.slice().sort(function(a,b) {
+    if (a.found !== b.found) return a.found ? 1 : -1;
+    return a.keyword.localeCompare(b.keyword);
+  });
+
+  var html = '';
+  for (var i = 0; i < sorted.length; i++) {
+    var r = sorted[i];
+    var badge = r.found
+      ? '<span style="color:#16a34a;font-size:12px;font-weight:600;">✓ #' + r.position + '</span>'
+      : '<span style="color:#dc2626;font-size:12px;font-weight:700;">✗ INVISIBLE</span>';
+
+    html += '<div style="padding:8px 12px;margin-bottom:4px;border-left:4px solid ' + (r.found ? '#16a34a' : '#dc2626') + ';background:' + (r.found ? '#f0fdf4' : '#fef2f2') + ';border-radius:6px;">';
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
+    html += '<span style="font-size:14px;">"' + r.keyword + '"</span> ' + badge;
+    html += '</div>';
+
+    if (!r.found && r.topCompetitors.length > 0) {
+      html += '<div style="margin-top:4px;font-size:12px;color:#888;">';
+      for (var c = 0; c < Math.min(2, r.topCompetitors.length); c++) {
+        var comp = r.topCompetitors[c];
+        html += '#' + (c+1) + ' ' + comp.name + ' ★' + comp.rating + ' (' + comp.reviews + ') ';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+}
+
+function dlAdvancedExcel() {
+  var audit = window._advAudit;
+  var checks = window._advChecks;
+  if (!audit) return;
+
+  var biz = audit.biz;
+  var results = audit.results;
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+  var vis = results.filter(function(r){return r.found;}).length;
+  var visPct = Math.round(vis / results.length * 100);
+  var cats = biz.categories || [];
+
+  var wb = XLSX.utils.book_new();
+  var data = [];
+
+  // Title
+  data.push([isES ? 'AUDITORÍA AVANZADA GMB' : 'ADVANCED GMB AUDIT']);
+  data.push(['']);
+  data.push(['═══════════════════════════════════════════════════════']);
+
+  // Business info
+  data.push([isES ? 'Negocio' : 'Business', biz.title || '']);
+  data.push([isES ? 'Dirección' : 'Address', biz.address || '']);
+  data.push([isES ? 'Teléfono' : 'Phone', biz.phone || '']);
+  data.push([isES ? 'Sitio web' : 'Website', biz.website || (isES ? 'SIN SITIO WEB' : 'NO WEBSITE')]);
+  data.push([isES ? 'Categoría principal' : 'Primary category', biz.categoryName || '']);
+  data.push([isES ? 'Categorías secundarias' : 'Secondary categories', cats.length > 1 ? cats.slice(1).join(', ') : (isES ? 'NINGUNA' : 'NONE')]);
+  data.push([isES ? 'Barrio' : 'Neighborhood', audit.barrio || '']);
+  data.push([isES ? 'Calificación' : 'Rating', (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + (isES ? ' reseñas)' : ' reviews)')]);
+  data.push([isES ? 'Fotos' : 'Photos', biz.imageCount || biz.imagesCount || 0]);
+  data.push([isES ? 'Perfil Google Maps' : 'Google Maps Profile', biz.url || '']);
+  data.push(['']);
+  data.push([isES ? 'VISIBILIDAD' : 'VISIBILITY', visPct + '%', '', vis + '/' + results.length]);
+  data.push(['']);
+
+  // 20-step checklist
+  data.push(['═══════════════════════════════════════════════════════']);
+  data.push([isES ? 'CHECKLIST DE OPTIMIZACIÓN GMB' : 'GMB OPTIMIZATION CHECKLIST']);
+  data.push(['']);
+  data.push([isES ? 'PASO' : 'STEP', isES ? 'ITEM' : 'ITEM', isES ? 'ESTADO' : 'STATUS', isES ? 'ACCIÓN REQUERIDA' : 'ACTION NEEDED']);
+
+  for (var i = 0; i < checks.length; i++) {
+    var c = checks[i];
+    data.push([
+      c.step > 0 ? c.step : '',
+      c.label,
+      c.ok ? '✓ OK' : '✗ ' + c.value,
+      c.tip || '',
+    ]);
+  }
+
+  data.push(['']);
+
+  // Visibility table
+  data.push(['═══════════════════════════════════════════════════════']);
+  data.push([isES ? 'RESULTADOS DE VISIBILIDAD' : 'VISIBILITY RESULTS']);
+  data.push(['']);
+  data.push([isES ? 'BÚSQUEDA' : 'SEARCH', isES ? 'VISIBLE?' : 'VISIBLE?', 'POS.', isES ? 'QUIÉN APARECE' : 'WHO SHOWS UP', '', isES ? 'CALIF.' : 'RATING', isES ? 'RESEÑAS' : 'REVIEWS']);
+
+  for (var j = 0; j < results.length; j++) {
+    var r = results[j];
+    var c1 = r.topCompetitors[0] || {};
+    data.push([r.keyword, r.found ? (isES ? 'SÍ' : 'YES') : 'NO', r.found ? '#' + r.position : '—', c1.name || '', '', c1.rating || '', c1.reviews || '']);
+    var c2 = r.topCompetitors[1] || {};
+    if (!r.found && c2.name) {
+      data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
+    }
+  }
+
+  // Competitor categories
+  data.push(['']);
+  data.push(['═══════════════════════════════════════════════════════']);
+  data.push([isES ? 'CATEGORÍAS DE COMPETIDORES' : 'COMPETITOR CATEGORIES']);
+  data.push(['']);
+
+  var compCatCount = {};
+  for (var ci = 0; ci < results.length; ci++) {
+    var comps = results[ci].topCompetitors || [];
+    for (var cj = 0; cj < comps.length; cj++) {
+      var cc = comps[cj].categories || [];
+      for (var ck = 0; ck < cc.length; ck++) {
+        if (!compCatCount[cc[ck]]) compCatCount[cc[ck]] = 0;
+        compCatCount[cc[ck]]++;
+      }
+    }
+  }
+  var compCatList = Object.keys(compCatCount).sort(function(a,b){return compCatCount[b]-compCatCount[a];});
+  var bizCatSet = {};
+  for (var bc = 0; bc < cats.length; bc++) bizCatSet[cats[bc]] = true;
+  var missingCats = compCatList.filter(function(c){return !bizCatSet[c];});
+
+  if (missingCats.length > 0) {
+    data.push([isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:']);
+    for (var mi = 0; mi < Math.min(10, missingCats.length); mi++) {
+      data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (isES ? ' competidores' : ' competitors')]);
+    }
+  } else {
+    data.push([isES ? 'No se encontraron categorías de competidores' : 'No competitor categories found']);
+  }
+
+  var ws = XLSX.utils.aoa_to_sheet(data);
+  ws['!cols'] = [{wch:12},{wch:30},{wch:20},{wch:50},{wch:2},{wch:8},{wch:10}];
+  XLSX.utils.book_append_sheet(wb, ws, 'Advanced Audit');
+
+  var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
+  XLSX.writeFile(wb, 'advanced-audit-' + name + '.xlsx');
+}
 
 function dlBulkAuditExcel() {
   var audits = window._allAudits;

@@ -1602,29 +1602,24 @@ async function runGMBAudit(token) {
       var audit = await auditOneBusiness(token, urls[i], mainKeyword, extraKeywords, radius);
       if (audit) {
         allAudits.push(audit);
-        setStatus('Business ' + (i+1) + '/' + urls.length + ' — ' + audit.biz.title + ' done (' + audit.results.filter(function(r){return r.found;}).length + '/' + audit.results.length + ' visible)', 'info');
+        setStatus('✓ Business ' + (i+1) + '/' + urls.length + ' — ' + audit.biz.title + ' (' + audit.results.filter(function(r){return r.found;}).length + '/' + audit.results.length + ' visible)', 'info');
       } else {
-        setStatus('Business ' + (i+1) + '/' + urls.length + ' — could not scrape, skipping', 'error');
+        setStatus('✗ Business ' + (i+1) + '/' + urls.length + ' — could not scrape. URL: ' + urls[i].slice(0,60) + '...', 'error');
       }
     } catch(err) {
-      setStatus('Business ' + (i+1) + '/' + urls.length + ' — error: ' + err.message, 'error');
+      setStatus('✗ Business ' + (i+1) + '/' + urls.length + ' — error: ' + err.message + ' URL: ' + urls[i].slice(0,60), 'error');
     }
+    // Small delay between businesses to avoid rate limiting
+    if (i < urls.length - 1) await sleep(2000);
   }
 
   setProgress(95);
 
-  if (allAudits.length === 0) throw new Error('No businesses could be scraped');
+  if (allAudits.length === 0) throw new Error('No businesses could be scraped. Check your URLs.');
 
   window._allAudits = allAudits;
-  // For single business, also set the legacy vars for screen display
-  if (allAudits.length === 1) {
-    window._auditBiz = allAudits[0].biz;
-    window._auditResults = allAudits[0].results;
-    window._auditBarrio = allAudits[0].barrio;
-    renderAudit(allAudits[0].biz, allAudits[0].results, allAudits[0].barrio);
-  } else {
-    renderBulkAudit(allAudits);
-  }
+  // Always use bulk render/download — even for 1 business
+  renderBulkAudit(allAudits);
   setProgress(100);
 }
 

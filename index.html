@@ -215,14 +215,15 @@ veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-si
     </div>
 
     <div id="audit-fields" class="hidden">
-      <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste a Google Maps URL. The tool scrapes the business profile, then searches for their category keywords near their location. Shows exactly which searches they're INVISIBLE on — the red lines are your sale.</div>
+      <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste a Google Maps URL. The tool checks if the business shows up when people search for their services nearby. Red lines = invisible = your sale.</div>
       <label>Google Maps URL of the business</label>
       <input type="text" id="audit-url" placeholder="https://maps.google.com/maps/place/Dr+Cifuentes+Fernando/..." />
+      <label>Neighborhood / Barrio (important!)</label>
+      <input type="text" id="audit-barrio" placeholder="Recoleta" />
       <label>Extra keywords to check (optional, one per line)</label>
-      <textarea id="audit-extra-keywords" rows="4" placeholder="odontólogo Recoleta
-blanqueamiento dental
-ortodoncia
-implantes dentales" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <textarea id="audit-extra-keywords" rows="3" placeholder="ortodoncia
+implantes dentales
+blanqueamiento" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
       <label>Search radius</label>
       <select id="audit-radius">
         <option value="1000">1 km (tight — same block)</option>
@@ -1438,6 +1439,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function runGMBAudit(token) {
   var url = document.getElementById('audit-url').value.trim();
+  var barrio = document.getElementById('audit-barrio').value.trim();
   var extraRaw = document.getElementById('audit-extra-keywords').value.trim();
   var radius = parseInt(document.getElementById('audit-radius').value);
 
@@ -1468,53 +1470,42 @@ async function runGMBAudit(token) {
   var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
   var bizCategory = biz.categoryName || '';
   var bizCategories = (biz.categories || []);
-  var bizAddress = biz.address || '';
-  var bizPhone = biz.phone || '';
-  var bizWebsite = biz.website || '';
-  var bizRating = biz.totalScore || 0;
-  var bizReviews = biz.reviewsCount || 0;
-  var bizPhotos = biz.imageCount || biz.imagesCount || 0;
-
-  // Extract city/barrio from address
-  var addressParts = bizAddress.split(',').map(function(s){return s.trim();});
-  var barrio = addressParts.length > 1 ? addressParts[addressParts.length - 3] || addressParts[0] : '';
-  var city = addressParts.length > 1 ? addressParts[addressParts.length - 2] || '' : '';
 
   setStatus('Step 2/4 — Found: ' + bizName + ' (' + bizCategory + '). Building keyword list...', 'info');
   setProgress(25);
 
-  // Step 2: Generate search keywords
+  // Step 2: Generate REAL search keywords — what actual customers would type
   var keywords = [];
 
-  // Primary category variations
+  // Primary category: bare, with barrio, with "cerca de mi"
   if (bizCategory) {
-    keywords.push(bizCategory.toLowerCase());
-    if (barrio) keywords.push(bizCategory.toLowerCase() + ' ' + barrio);
-    if (city) keywords.push(bizCategory.toLowerCase() + ' ' + city);
-    keywords.push(bizCategory.toLowerCase() + ' cerca de mi');
+    var cat = bizCategory.toLowerCase();
+    keywords.push(cat);
+    keywords.push(cat + ' cerca de mi');
+    if (barrio) keywords.push(cat + ' ' + barrio);
   }
 
-  // All secondary categories
+  // Secondary categories: bare and with barrio
   for (var c = 0; c < bizCategories.length; c++) {
-    var cat = bizCategories[c].toLowerCase();
-    if (cat !== bizCategory.toLowerCase()) {
-      keywords.push(cat);
-      if (barrio) keywords.push(cat + ' ' + barrio);
+    var secCat = bizCategories[c].toLowerCase();
+    if (secCat !== bizCategory.toLowerCase()) {
+      keywords.push(secCat);
+      if (barrio) keywords.push(secCat + ' ' + barrio);
     }
   }
 
-  // Common Spanish dental/medical synonyms based on category
+  // Spanish synonyms based on category
   var synonymMap = {
-    'dentista': ['odontólogo', 'clínica dental', 'consultorio dental', 'dentista de urgencia', 'limpieza dental', 'blanqueamiento dental', 'ortodoncia', 'implantes dentales'],
-    'peluquería': ['salón de belleza', 'corte de pelo', 'peluquero', 'estilista', 'barbería'],
-    'hair salon': ['peluquería', 'salón de belleza', 'corte de pelo', 'estilista'],
-    'restaurant': ['restaurante', 'comida', 'almuerzo', 'cena'],
-    'restaurante': ['comida', 'almuerzo', 'cena', 'donde comer'],
-    'pintor': ['pintura', 'pintores', 'pinturería'],
-    'plomero': ['plomería', 'destapaciones', 'gasista'],
-    'abogado': ['estudio jurídico', 'abogados', 'asesoría legal'],
-    'contador': ['estudio contable', 'contadores', 'contabilidad'],
-    'veterinaria': ['veterinario', 'clínica veterinaria', 'pet shop'],
+    'dentista': ['odontólogo', 'clínica dental', 'consultorio dental'],
+    'peluquería': ['salón de belleza', 'peluquero', 'estilista'],
+    'hair salon': ['peluquería', 'salón de belleza', 'estilista'],
+    'restaurant': ['restaurante', 'donde comer'],
+    'restaurante': ['donde comer', 'comida'],
+    'pintor': ['pinturería', 'pintores'],
+    'plomero': ['plomería', 'destapaciones'],
+    'abogado': ['estudio jurídico', 'asesoría legal'],
+    'contador': ['estudio contable', 'contadores'],
+    'veterinaria': ['veterinario', 'clínica veterinaria'],
   };
 
   var catLower = bizCategory.toLowerCase();
@@ -1528,11 +1519,14 @@ async function runGMBAudit(token) {
     }
   }
 
-  // Add user's extra keywords
+  // Add user's extra keywords (bare + with barrio)
   if (extraRaw) {
     var extras = extraRaw.split('\n').map(function(k){return k.trim().toLowerCase();}).filter(function(k){return k.length > 0;});
     for (var e = 0; e < extras.length; e++) {
       keywords.push(extras[e]);
+      if (barrio && !extras[e].includes(barrio.toLowerCase())) {
+        keywords.push(extras[e] + ' ' + barrio);
+      }
     }
   }
 
@@ -1547,8 +1541,7 @@ async function runGMBAudit(token) {
     }
   }
 
-  // Cap at 30 keywords to keep Apify costs reasonable
-  uniqueKeywords = uniqueKeywords.slice(0, 30);
+  uniqueKeywords = uniqueKeywords.slice(0, 25);
 
   setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords near ' + bizName + '...', 'info');
   setProgress(30);

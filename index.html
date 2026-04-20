@@ -1484,6 +1484,18 @@ async function detectBarrio(biz) {
         var geoData = await geoResp.json();
         var addr = geoData.address || {};
         barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
+        // Clean: "Barrio Castex, Flores, Comuna 7" → "Flores"
+        // Take the most recognizable part — usually after first comma, or first part without "Barrio"/"Comuna"
+        if (barrio.includes(',')) {
+          var parts = barrio.split(',').map(function(s){return s.trim();});
+          // Filter out parts with "Comuna", "Barrio", numbers only
+          var clean = parts.filter(function(p) {
+            return p && !p.match(/^Comuna\s/i) && !p.match(/^Barrio\s/i) && !p.match(/^\d+$/);
+          });
+          barrio = clean.length > 0 ? clean[clean.length > 1 ? 1 : 0] : parts[0];
+        }
+        // Strip "Barrio " prefix if it remains
+        barrio = barrio.replace(/^Barrio\s+/i, '').trim();
       }
     } catch(e) {}
     // Nominatim rate limit: 1 req/sec

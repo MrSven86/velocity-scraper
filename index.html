@@ -1700,11 +1700,52 @@ async function runGMBAudit(token) {
     allAudits.push({biz: b.biz, results: auditResults, barrio: b.barrio});
   }
 
+  // ═══ ADVANCED: Scrape #1 competitor's full profile ═══
+  var topCompetitorProfile = null;
+  if (isAdvanced && allAudits.length === 1) {
+    var mainResults = allAudits[0].results;
+    // Find the #1 competitor from the first keyword search
+    var topComp = null;
+    for (var ti = 0; ti < mainResults.length; ti++) {
+      if (mainResults[ti].topCompetitors && mainResults[ti].topCompetitors.length > 0) {
+        topComp = mainResults[ti].topCompetitors[0];
+        break;
+      }
+    }
+
+    if (topComp && topComp.name) {
+      setStatus('Advanced: Scraping #1 competitor profile — ' + topComp.name + '...', 'info');
+      setProgress(92);
+
+      // Search for the competitor to get their Maps URL
+      try {
+        var compSearchInput = {
+          searchStringsArray: [topComp.name],
+          maxCrawledPlacesPerSearch: 1,
+          language: 'es',
+          maxReviews: 0,
+          maxImages: 0,
+          scrapeReviewerInfo: false,
+        };
+        if (businesses[0] && businesses[0].lat) {
+          compSearchInput.lat = String(businesses[0].lat);
+          compSearchInput.lng = String(businesses[0].lng);
+        }
+        var compRunId = await startActor(token, 'compass~crawler-google-places', compSearchInput);
+        var compResults = await pollRun(token, compRunId);
+        if (compResults && compResults.length > 0) {
+          topCompetitorProfile = compResults[0];
+        }
+      } catch(e) { /* silent */ }
+    }
+  }
+
   setProgress(95);
   setStatus('Done! ' + allAudits.length + ' businesses audited.', 'info');
 
   window._allAudits = allAudits;
   if (isAdvanced && allAudits.length === 1) {
+    allAudits[0].topCompetitor = topCompetitorProfile;
     renderAdvancedAudit(allAudits[0]);
   } else {
     renderBulkAudit(allAudits);
@@ -2182,24 +2223,29 @@ function renderAdvancedAudit(audit) {
 
   var biz = audit.biz;
   var results = audit.results;
+  var comp = audit.topCompetitor;
   var vis = results.filter(function(r){return r.found;}).length;
   var inv = results.filter(function(r){return !r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
 
-  // Build 20-step checklist
-  var checks = buildGMBChecklist(biz, results);
+  var checks = buildGMBChecklist(biz, results, isES);
   var passed = checks.filter(function(c){return c.ok;}).length;
 
   document.getElementById('stats').innerHTML =
-    '<div class="stat"><div class="stat-num">' + visPct + '%</div><div class="stat-label">visibility</div></div>' +
-    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + inv + '</div><div class="stat-label">invisible</div></div>' +
+    '<div class="stat"><div class="stat-num">' + visPct + '%</div><div class="stat-label">' + (isES ? 'visibilidad' : 'visibility') + '</div></div>' +
+    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + inv + '</div><div class="stat-label">' + (isES ? 'invisible' : 'invisible') + '</div></div>' +
     '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + passed + '/' + checks.length + '</div><div class="stat-label">checklist</div></div>' +
-    '<div class="stat"><div class="stat-num">' + (biz.reviewsCount||0) + '</div><div class="stat-label">reviews</div></div>';
+    '<div class="stat"><div class="stat-num">' + (biz.reviewsCount||0) + '</div><div class="stat-label">' + (isES ? 'reseñas' : 'reviews') + '</div></div>';
 
-  document.getElementById('result-tabs').innerHTML =
-    '<button class="tab active" onclick="switchAdvTab(\'checklist\',this)">GMB Checklist</button>' +
-    '<button class="tab" onclick="switchAdvTab(\'visibility\',this)">Visibility</button>' +
-    '<button class="tab" onclick="switchAdvTab(\'profile\',this)">Profile</button>';
+  var tabs = '<button class="tab active" onclick="switchAdvTab(\'checklist\',this)">Checklist</button>' +
+    '<button class="tab" onclick="switchAdvTab(\'visibility\',this)">' + (isES ? 'Visibilidad' : 'Visibility') + '</button>';
+  if (comp) {
+    tabs += '<button class="tab" onclick="switchAdvTab(\'comparison\',this)">vs #1</button>';
+  }
+  tabs += '<button class="tab" onclick="switchAdvTab(\'profile\',this)">' + (isES ? 'Perfil' : 'Profile') + '</button>';
+  document.getElementById('result-tabs').innerHTML = tabs;
 
   window._advAudit = audit;
   window._advChecks = checks;
@@ -2208,7 +2254,7 @@ function renderAdvancedAudit(audit) {
   renderAdvChecklist(checks);
 
   document.getElementById('dl-btns').innerHTML =
-    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAdvancedExcel()">Download Advanced Audit (Excel)</button>';
+    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAdvancedExcel()">' + (isES ? 'Descargar Auditoría Avanzada (Excel)' : 'Download Advanced Audit (Excel)') + '</button>';
 }
 
 function switchAdvTab(tab, btn) {
@@ -2216,10 +2262,11 @@ function switchAdvTab(tab, btn) {
   if (btn) btn.classList.add('active');
   if (tab === 'checklist') renderAdvChecklist(window._advChecks);
   else if (tab === 'visibility') renderAdvVisibility(window._advAudit);
+  else if (tab === 'comparison') renderComparison(window._advAudit);
   else if (tab === 'profile') renderAuditProfile();
 }
 
-function buildGMBChecklist(biz, results) {
+function buildGMBChecklist(biz, results, isES) {
   var checks = [];
   var cats = biz.categories || [];
   var vis = results.filter(function(r){return r.found;}).length;
@@ -2230,93 +2277,84 @@ function buildGMBChecklist(biz, results) {
   var hasWebsite = biz.website && biz.website.trim() !== '';
   var hasPhone = biz.phone && biz.phone.trim() !== '';
 
-  // Step 1: Profile claimed
   var isClaimed = !(biz.claimStatus === 'unclaimed' || biz.isAdvertiser === false);
   checks.push({
-    step: 1, label: 'Perfil reclamado',
+    step: 1, label: isES ? 'Perfil reclamado' : 'Profile claimed',
     ok: isClaimed,
-    value: isClaimed ? 'Reclamado' : 'NO RECLAMADO',
-    tip: isClaimed ? '' : 'Reclamar el perfil inmediatamente en business.google.com',
+    value: isClaimed ? (isES ? 'Reclamado' : 'Claimed') : (isES ? 'NO RECLAMADO' : 'NOT CLAIMED'),
+    tip: isClaimed ? '' : (isES ? 'Reclamar el perfil inmediatamente en business.google.com' : 'Claim the profile immediately at business.google.com'),
   });
 
-  // Step 3: Primary category
   checks.push({
-    step: 3, label: 'Categoría principal',
+    step: 3, label: isES ? 'Categoría principal' : 'Primary category',
     ok: !!(biz.categoryName),
-    value: biz.categoryName || 'NO CONFIGURADA',
-    tip: biz.categoryName ? 'Verificar que coincida con los top 3 competidores' : 'Configurar la categoría principal — es el factor #1 de ranking',
+    value: biz.categoryName || (isES ? 'NO CONFIGURADA' : 'NOT SET'),
+    tip: biz.categoryName ? (isES ? 'Verificar que coincida con los top 3 competidores' : 'Verify it matches top 3 competitors') : (isES ? 'Configurar la categoría principal — es el factor #1 de ranking' : 'Set primary category — #1 ranking factor'),
   });
 
-  // Step 4: Secondary categories
   checks.push({
-    step: 4, label: 'Categorías secundarias',
+    step: 4, label: isES ? 'Categorías secundarias' : 'Secondary categories',
     ok: cats.length >= 3,
-    value: cats.length <= 1 ? 'NINGUNA' : (cats.length - 1) + ' categorías',
-    tip: cats.length >= 3 ? 'OK — ' + cats.join(', ') : 'Agregar categorías secundarias — competidores usan 3-5. Actuales: ' + (cats.join(', ') || 'ninguna'),
+    value: cats.length <= 1 ? (isES ? 'NINGUNA' : 'NONE') : (cats.length - 1) + (isES ? ' categorías' : ' categories'),
+    tip: cats.length >= 3 ? cats.join(', ') : (isES ? 'Agregar categorías secundarias — competidores usan 3-5' : 'Add secondary categories — competitors use 3-5'),
   });
 
-  // Step 5: Business name
   var nameWords = (biz.title || '').split(/\s+/).length;
   var hasKeywordStuffing = nameWords > 8;
   checks.push({
-    step: 5, label: 'Nombre del negocio',
+    step: 5, label: isES ? 'Nombre del negocio' : 'Business name',
     ok: !hasKeywordStuffing && !!(biz.title),
-    value: biz.title || 'SIN NOMBRE',
-    tip: hasKeywordStuffing ? 'Posible keyword stuffing — riesgo de suspensión' : 'OK — verificar que refleje el nombre real del negocio',
+    value: biz.title || (isES ? 'SIN NOMBRE' : 'NO NAME'),
+    tip: hasKeywordStuffing ? (isES ? 'Posible keyword stuffing — riesgo de suspensión' : 'Possible keyword stuffing — suspension risk') : '',
   });
 
-  // Step 6: Description
   checks.push({
-    step: 6, label: 'Descripción',
+    step: 6, label: isES ? 'Descripción' : 'Description',
     ok: hasDesc,
-    value: hasDesc ? (biz.description.length + ' caracteres') : 'VACÍA',
-    tip: hasDesc ? '' : 'Escribir descripción — 750 caracteres máx, mencionar el barrio naturalmente',
+    value: hasDesc ? ((biz.description.length) + (isES ? ' caracteres' : ' chars')) : (isES ? 'VACÍA' : 'EMPTY'),
+    tip: hasDesc ? '' : (isES ? 'Escribir descripción — 750 caracteres máx, mencionar el barrio' : 'Write description — 750 chars max, mention the neighborhood'),
   });
 
-  // Step 7: Contact info
   checks.push({
-    step: 7, label: 'Teléfono',
+    step: 7, label: isES ? 'Teléfono' : 'Phone',
     ok: hasPhone,
-    value: hasPhone ? biz.phone : 'FALTA',
-    tip: hasPhone ? '' : 'Agregar número de teléfono',
+    value: hasPhone ? biz.phone : (isES ? 'FALTA' : 'MISSING'),
+    tip: hasPhone ? '' : (isES ? 'Agregar número de teléfono' : 'Add phone number'),
   });
+
   checks.push({
-    step: 7, label: 'Sitio web',
+    step: 7, label: isES ? 'Sitio web' : 'Website',
     ok: hasWebsite,
-    value: hasWebsite ? biz.website : 'SIN SITIO WEB',
-    tip: hasWebsite ? '' : 'Necesita un sitio web — oportunidad de venta',
+    value: hasWebsite ? biz.website : (isES ? 'SIN SITIO WEB' : 'NO WEBSITE'),
+    tip: hasWebsite ? '' : (isES ? 'Necesita un sitio web — oportunidad de venta' : 'Needs a website — sales opportunity'),
   });
 
-  // Step 8: Business hours
   checks.push({
-    step: 8, label: 'Horarios',
+    step: 8, label: isES ? 'Horarios' : 'Business hours',
     ok: hasHours,
-    value: hasHours ? 'Configurados' : 'NO CONFIGURADOS',
-    tip: hasHours ? '' : 'Configurar horarios — Google muestra más negocios con horarios',
+    value: hasHours ? (isES ? 'Configurados' : 'Set') : (isES ? 'NO CONFIGURADOS' : 'NOT SET'),
+    tip: hasHours ? '' : (isES ? 'Configurar horarios — Google muestra más negocios con horarios' : 'Set hours — Google shows more businesses with hours set'),
   });
 
-  // Step 11: Photos
   checks.push({
-    step: 11, label: 'Fotos',
+    step: 11, label: isES ? 'Fotos' : 'Photos',
     ok: photos >= 10,
-    value: photos + ' fotos',
-    tip: photos >= 10 ? '' : 'Subir más fotos — mínimo 10, competidores tienen 30+. Geo-etiquetar en geoimgr.com',
+    value: photos + (isES ? ' fotos' : ' photos'),
+    tip: photos >= 10 ? '' : (isES ? 'Subir más fotos — mínimo 10, competidores tienen 30+' : 'Upload more photos — minimum 10, competitors have 30+'),
   });
 
-  // Step 16: Reviews
   checks.push({
-    step: 16, label: 'Reseñas',
+    step: 16, label: isES ? 'Reseñas' : 'Reviews',
     ok: reviews >= 20,
-    value: reviews + ' reseñas (' + (biz.totalScore || 0) + ' ★)',
-    tip: reviews >= 20 ? '' : 'Necesita más reseñas — pedir a cada cliente con link de WhatsApp',
+    value: reviews + (isES ? ' reseñas' : ' reviews') + ' (' + (biz.totalScore || 0) + ' ★)',
+    tip: reviews >= 20 ? '' : (isES ? 'Necesita más reseñas — pedir a cada cliente' : 'Needs more reviews — ask every customer'),
   });
 
-  // Visibility check
   checks.push({
-    step: 0, label: 'Visibilidad en búsquedas',
+    step: 0, label: isES ? 'Visibilidad en búsquedas' : 'Search visibility',
     ok: vis > results.length * 0.5,
     value: vis + '/' + results.length + ' (' + Math.round(vis/results.length*100) + '%)',
-    tip: vis <= results.length * 0.5 ? 'Invisible en la mayoría de búsquedas — necesita optimización' : '',
+    tip: vis <= results.length * 0.5 ? (isES ? 'Invisible en la mayoría de búsquedas' : 'Invisible in most searches') : '',
   });
 
   return checks;
@@ -2349,6 +2387,8 @@ function renderAdvChecklist(checks) {
 
 function renderAdvVisibility(audit) {
   var results = audit.results;
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
   var sorted = results.slice().sort(function(a,b) {
     if (a.found !== b.found) return a.found ? 1 : -1;
     return a.keyword.localeCompare(b.keyword);
@@ -2379,6 +2419,81 @@ function renderAdvVisibility(audit) {
 
   document.getElementById('pane-posts').innerHTML = html;
   document.getElementById('pane-posts').classList.remove('hidden');
+}
+
+function renderComparison(audit) {
+  var biz = audit.biz;
+  var comp = audit.topCompetitor;
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+
+  if (!comp) {
+    document.getElementById('pane-posts').innerHTML = '<p style="color:#999;">' + (isES ? 'No se encontró competidor para comparar' : 'No competitor found to compare') + '</p>';
+    document.getElementById('pane-posts').classList.remove('hidden');
+    return;
+  }
+
+  var rows = [
+    {label: isES ? 'Nombre' : 'Name', you: biz.title || '', them: comp.title || ''},
+    {label: isES ? 'Calificación' : 'Rating', you: (biz.totalScore || 0) + ' ★', them: (comp.totalScore || 0) + ' ★', youWins: (biz.totalScore||0) >= (comp.totalScore||0)},
+    {label: isES ? 'Reseñas' : 'Reviews', you: biz.reviewsCount || 0, them: comp.reviewsCount || 0, youWins: (biz.reviewsCount||0) >= (comp.reviewsCount||0)},
+    {label: isES ? 'Fotos' : 'Photos', you: biz.imageCount || biz.imagesCount || 0, them: comp.imageCount || comp.imagesCount || 0, youWins: (biz.imageCount||biz.imagesCount||0) >= (comp.imageCount||comp.imagesCount||0)},
+    {label: isES ? 'Categorías' : 'Categories', you: (biz.categories||[]).length, them: (comp.categories||[]).length, youWins: (biz.categories||[]).length >= (comp.categories||[]).length},
+    {label: isES ? 'Descripción' : 'Description', you: biz.description ? '✓' : '✗', them: comp.description ? '✓' : '✗', youWins: !!(biz.description)},
+    {label: isES ? 'Sitio web' : 'Website', you: biz.website ? '✓' : '✗', them: comp.website ? '✓' : '✗', youWins: !!(biz.website)},
+    {label: isES ? 'Horarios' : 'Hours', you: (biz.openingHours&&biz.openingHours.length) ? '✓' : '✗', them: (comp.openingHours&&comp.openingHours.length) ? '✓' : '✗', youWins: !!(biz.openingHours&&biz.openingHours.length)},
+    {label: isES ? 'Teléfono' : 'Phone', you: biz.phone ? '✓' : '✗', them: comp.phone ? '✓' : '✗', youWins: !!(biz.phone)},
+  ];
+
+  var html = '<div style="margin-bottom:12px;font-size:14px;font-weight:600;">' +
+    (isES ? 'Tu negocio vs #1 en el área' : 'Your business vs #1 in the area') + '</div>';
+
+  html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;font-size:13px;">';
+  // Header
+  html += '<div style="padding:8px;font-weight:700;background:#f3f4f6;border-radius:6px 0 0 0;"></div>';
+  html += '<div style="padding:8px;font-weight:700;background:#fef2f2;text-align:center;color:#dc2626;">' + (biz.title || '').slice(0,25) + '</div>';
+  html += '<div style="padding:8px;font-weight:700;background:#dcfce7;text-align:center;color:#166534;">#1 ' + (comp.title || '').slice(0,25) + '</div>';
+
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var bg = i % 2 === 0 ? '#fff' : '#f9fafb';
+    var youColor = r.youWins === false ? '#dc2626' : (r.youWins === true ? '#166534' : '#333');
+    var themColor = r.youWins === true ? '#333' : (r.youWins === false ? '#166534' : '#333');
+
+    html += '<div style="padding:8px;background:' + bg + ';font-weight:600;">' + r.label + '</div>';
+    html += '<div style="padding:8px;background:' + bg + ';text-align:center;color:' + youColor + ';">' + r.you + '</div>';
+    html += '<div style="padding:8px;background:' + bg + ';text-align:center;color:' + themColor + ';">' + r.them + '</div>';
+  }
+  html += '</div>';
+
+  // Categories comparison
+  var yourCats = biz.categories || [];
+  var theirCats = comp.categories || [];
+  var yourSet = {};
+  yourCats.forEach(function(c){yourSet[c]=true;});
+  var missingCats = theirCats.filter(function(c){return !yourSet[c];});
+
+  if (missingCats.length > 0) {
+    html += '<div style="margin-top:16px;padding:12px;background:#fef2f2;border-radius:8px;">';
+    html += '<div style="font-weight:600;margin-bottom:6px;">' + (isES ? 'Categorías que #1 tiene y usted NO:' : 'Categories #1 has that you DON\'T:') + '</div>';
+    for (var m = 0; m < missingCats.length; m++) {
+      html += '<div style="font-size:13px;padding:2px 0;">→ ' + missingCats[m] + '</div>';
+    }
+    html += '</div>';
+  }
+
+  if (theirCats.length > 0) {
+    html += '<div style="margin-top:8px;padding:12px;background:#f0fdf4;border-radius:8px;">';
+    html += '<div style="font-weight:600;margin-bottom:6px;">' + (isES ? 'Todas las categorías de #1:' : 'All categories of #1:') + '</div>';
+    html += '<div style="font-size:13px;">' + theirCats.join(', ') + '</div>';
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
 }
 
 function dlAdvancedExcel() {
@@ -2480,6 +2595,41 @@ function dlAdvancedExcel() {
     }
   } else {
     data.push([isES ? 'No se encontraron categorías de competidores' : 'No competitor categories found']);
+  }
+
+  // ═══ #1 COMPETITOR COMPARISON ═══
+  var comp = audit.topCompetitor;
+  if (comp) {
+    data.push(['']);
+    data.push(['═══════════════════════════════════════════════════════']);
+    data.push([isES ? 'COMPARACIÓN CON #1 EN EL ÁREA' : 'COMPARISON WITH #1 IN THE AREA']);
+    data.push(['']);
+    data.push(['', isES ? 'USTED' : 'YOU', '#1 ' + (comp.title || '').slice(0,30)]);
+    data.push([isES ? 'Nombre' : 'Name', biz.title || '', comp.title || '']);
+    data.push([isES ? 'Calificación' : 'Rating', (biz.totalScore||0) + ' ★', (comp.totalScore||0) + ' ★']);
+    data.push([isES ? 'Reseñas' : 'Reviews', biz.reviewsCount||0, comp.reviewsCount||0]);
+    data.push([isES ? 'Fotos' : 'Photos', biz.imageCount||biz.imagesCount||0, comp.imageCount||comp.imagesCount||0]);
+    data.push([isES ? 'Categorías' : 'Categories', cats.length, (comp.categories||[]).length]);
+    data.push([isES ? 'Descripción' : 'Description', biz.description ? (isES ? 'Sí' : 'Yes') : 'No', comp.description ? (isES ? 'Sí' : 'Yes') : 'No']);
+    data.push([isES ? 'Sitio web' : 'Website', biz.website ? (isES ? 'Sí' : 'Yes') : 'No', comp.website ? (isES ? 'Sí' : 'Yes') : 'No']);
+    data.push([isES ? 'Horarios' : 'Hours', (biz.openingHours&&biz.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No', (comp.openingHours&&comp.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No']);
+    data.push([isES ? 'Teléfono' : 'Phone', biz.phone||'No', comp.phone||'No']);
+
+    // Their categories
+    var theirCats = comp.categories || [];
+    if (theirCats.length > 0) {
+      data.push(['']);
+      data.push([isES ? 'Categorías de #1:' : 'Categories of #1:', theirCats.join(', ')]);
+    }
+
+    // Missing categories
+    var yourCatSet = {};
+    cats.forEach(function(c){yourCatSet[c]=true;});
+    var missing = theirCats.filter(function(c){return !yourCatSet[c];});
+    if (missing.length > 0) {
+      data.push([isES ? 'Categorías que #1 tiene y usted NO:' : 'Categories #1 has that you DON\'T:']);
+      missing.forEach(function(c){ data.push(['  → ' + c]); });
+    }
   }
 
   var ws = XLSX.utils.aoa_to_sheet(data);

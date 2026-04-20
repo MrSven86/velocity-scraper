@@ -1465,7 +1465,7 @@ function checkVisibility(bizName, kwResults) {
       if (mc >= bizWords.length * 0.6) match = true;
     }
     if (match && !found) { found = true; position = j + 1; }
-    else { comps.push({name: kwResults[j].title||'', rating: kwResults[j].totalScore||0, reviews: kwResults[j].reviewsCount||0}); }
+    else { comps.push({name: kwResults[j].title||'', rating: kwResults[j].totalScore||0, reviews: kwResults[j].reviewsCount||0, categories: kwResults[j].categories||[]}); }
   }
   return {found: found, position: position, topCompetitors: comps.slice(0,3)};
 }
@@ -2210,6 +2210,13 @@ function dlBulkAuditExcel() {
     data.push([L.phone, biz.phone || '']);
     data.push([L.website, biz.website || L.noWebsite]);
     data.push([L.category, biz.categoryName || '']);
+    // Show all categories
+    var allCats = biz.categories || [];
+    if (allCats.length > 1) {
+      data.push([isES ? 'Categorías secundarias' : 'Secondary categories', allCats.slice(1).join(', ')]);
+    } else {
+      data.push([isES ? 'Categorías secundarias' : 'Secondary categories', isES ? 'NINGUNA — agregar más' : 'NONE — add more']);
+    }
     data.push([L.barrio, audit.barrio || '']);
     data.push([L.rating, (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' ' + L.reviews.toLowerCase() + ')']);
     data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
@@ -2233,6 +2240,37 @@ function dlBulkAuditExcel() {
       var c2 = r.topCompetitors[1] || {};
       if (!r.found && c2.name) {
         data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
+      }
+    }
+
+    // Competitor category analysis — collect all unique categories from top competitors
+    var compCatCount = {};
+    for (var ci = 0; ci < results.length; ci++) {
+      var comps = results[ci].topCompetitors || [];
+      for (var cj = 0; cj < comps.length; cj++) {
+        var cc = comps[cj].categories || [];
+        for (var ck = 0; ck < cc.length; ck++) {
+          var catName = cc[ck];
+          if (!compCatCount[catName]) compCatCount[catName] = 0;
+          compCatCount[catName]++;
+        }
+      }
+    }
+    // Sort by frequency
+    var compCatList = Object.keys(compCatCount).sort(function(a,b) { return compCatCount[b] - compCatCount[a]; });
+    // Filter out categories the business already has
+    var bizCatSet = {};
+    for (var bc = 0; bc < allCats.length; bc++) bizCatSet[allCats[bc]] = true;
+    var missingCats = compCatList.filter(function(c) { return !bizCatSet[c]; });
+
+    if (missingCats.length > 0 || compCatList.length > 0) {
+      data.push(['']);
+      data.push([isES ? 'CATEGORÍAS DE COMPETIDORES' : 'COMPETITOR CATEGORIES']);
+      if (missingCats.length > 0) {
+        data.push([isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:']);
+        for (var mi = 0; mi < Math.min(8, missingCats.length); mi++) {
+          data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (isES ? ' competidores la usan' : ' competitors use it')]);
+        }
       }
     }
 

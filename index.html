@@ -218,18 +218,29 @@ veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-si
       <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste a Google Maps URL. The tool checks if the business shows up when people search for their services nearby. Red lines = invisible = your sale.</div>
       <label>Google Maps URL of the business</label>
       <input type="text" id="audit-url" placeholder="https://maps.google.com/maps/place/Dr+Cifuentes+Fernando/..." />
-      <label>Neighborhood / Barrio (important!)</label>
-      <input type="text" id="audit-barrio" placeholder="Recoleta" />
+      <label>Neighborhood / Barrio</label>
+      <input type="text" id="audit-barrio" placeholder="Auto-detected from coordinates" />
       <label>Extra keywords to check (optional, one per line)</label>
       <textarea id="audit-extra-keywords" rows="3" placeholder="ortodoncia
 implantes dentales
 blanqueamiento" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
-      <label>Search radius</label>
-      <select id="audit-radius">
-        <option value="1000">1 km (tight — same block)</option>
-        <option value="2000" selected>2 km (neighborhood)</option>
-        <option value="5000">5 km (wider area)</option>
-      </select>
+      <div style="display:flex;gap:12px;margin-top:8px;">
+        <div style="flex:1;">
+          <label>Search radius</label>
+          <select id="audit-radius">
+            <option value="1000">1 km</option>
+            <option value="2000" selected>2 km</option>
+            <option value="5000">5 km</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label>Report language</label>
+          <select id="audit-lang">
+            <option value="es" selected>Español</option>
+            <option value="en">English</option>
+          </select>
+        </div>
+      </div>
     </div>
 
     <div id="status" class="status info hidden"></div>
@@ -1650,6 +1661,7 @@ async function runGMBAudit(token) {
   setStatus('Step 4/4 — Building report...', 'info');
 
   // Step 4: Render results
+  if (!biz.url) biz.url = url; // fallback to input URL
   window._auditBiz = biz;
   window._auditResults = auditResults;
   window._auditBarrio = barrio;
@@ -1798,33 +1810,137 @@ function dlAuditExcel() {
   var barrio = window._auditBarrio || '';
   if (!biz || !results) return;
 
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+
+  // Labels
+  var L = isES ? {
+    title: 'INFORME DE VISIBILIDAD',
+    business: 'Negocio',
+    address: 'Dirección',
+    phone: 'Teléfono',
+    website: 'Sitio web',
+    category: 'Categoría',
+    rating: 'Calificación',
+    photos: 'Fotos',
+    profile: 'Perfil de Google Maps',
+    visScore: 'PUNTAJE DE VISIBILIDAD',
+    ofSearches: 'de',
+    searches: 'búsquedas',
+    search: 'BÚSQUEDA',
+    visible: 'VISIBLE?',
+    position: 'POSICIÓN',
+    whoInstead: 'QUIÉN APARECE EN SU LUGAR',
+    theirRating: 'CALIF.',
+    theirReviews: 'RESEÑAS',
+    yes: 'SÍ',
+    no: 'NO',
+    checklist: 'CHECKLIST DEL PERFIL',
+    needsMore: 'NECESITA MÁS — competidores tienen 30+',
+    askCustomers: 'NECESITA MÁS — pedir a cada cliente',
+    addMore: 'AGREGAR MÁS — competidores usan 3-5',
+    writeOne: 'ESCRIBIR UNA — 750 caracteres máx',
+    needsWebsite: 'NECESITA SITIO WEB',
+    ok: 'OK',
+    hasOne: 'Tiene',
+    missing: 'FALTA',
+    empty: 'VACÍO',
+    written: 'Escrita',
+    hoursSet: 'Horarios',
+    noWebsite: 'SIN SITIO WEB',
+    reviews: 'Reseñas',
+    categories: 'Categorías',
+    description: 'Descripción',
+  } : {
+    title: 'VISIBILITY REPORT',
+    business: 'Business',
+    address: 'Address',
+    phone: 'Phone',
+    website: 'Website',
+    category: 'Category',
+    rating: 'Rating',
+    photos: 'Photos',
+    profile: 'Google Maps Profile',
+    visScore: 'VISIBILITY SCORE',
+    ofSearches: 'of',
+    searches: 'searches',
+    search: 'SEARCH',
+    visible: 'VISIBLE?',
+    position: 'POSITION',
+    whoInstead: 'WHO SHOWS UP INSTEAD',
+    theirRating: 'RATING',
+    theirReviews: 'REVIEWS',
+    yes: 'YES',
+    no: 'NO',
+    checklist: 'PROFILE CHECKLIST',
+    needsMore: 'NEEDS MORE — competitors have 30+',
+    askCustomers: 'NEEDS MORE — ask every customer',
+    addMore: 'ADD MORE — competitors use 3-5',
+    writeOne: 'WRITE ONE — 750 chars max',
+    needsWebsite: 'NEEDS A WEBSITE',
+    ok: 'OK',
+    hasOne: 'Has one',
+    missing: 'MISSING',
+    empty: 'EMPTY',
+    written: 'Written',
+    hoursSet: 'Hours set',
+    noWebsite: 'NO WEBSITE',
+    reviews: 'Reviews',
+    categories: 'Categories',
+    description: 'Description',
+  };
+
   var wb = XLSX.utils.book_new();
   var visible = results.filter(function(r){return r.found;}).length;
   var invisible = results.filter(function(r){return !r.found;}).length;
   var visPct = Math.round(visible / results.length * 100);
+  var gmapsUrl = biz.url || biz.placeUrl || '';
 
-  // Single clean sheet — everything on one page
   var data = [];
+  var merges = [];
+  var rowIdx = 0;
 
-  // Header block
-  data.push(['VISIBILITY REPORT']);
+  // Row 0: Title
+  data.push([L.title, '', '', '', '', '', '']);
+  rowIdx++;
+
+  // Row 1: empty
   data.push(['']);
-  data.push(['Business', biz.title || '']);
-  data.push(['Address', biz.address || '']);
-  data.push(['Phone', biz.phone || '']);
-  data.push(['Website', biz.website || 'NO WEBSITE']);
-  data.push(['Category', biz.categoryName || '']);
-  data.push(['Rating', (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' reviews)']);
-  data.push(['Photos', (biz.imageCount || biz.imagesCount || 0)]);
+  rowIdx++;
+
+  // Row 2: yellow separator
+  data.push(['', '', '', '', '', '', '']);
+  rowIdx++;
+
+  // Profile block
+  data.push([L.business, biz.title || '']);
+  data.push([L.address, biz.address || '']);
+  data.push([L.phone, biz.phone || '']);
+  data.push([L.website, biz.website || L.noWebsite]);
+  data.push([L.category, biz.categoryName || '']);
+  data.push([L.rating, (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' ' + L.reviews.toLowerCase() + ')']);
+  data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
+  data.push([L.profile, gmapsUrl]);
+  rowIdx += 8;
+
+  // Empty row
   data.push(['']);
+  rowIdx++;
 
   // Visibility score
-  data.push(['VISIBILITY SCORE', visPct + '%', '', visible + ' of ' + results.length + ' searches']);
+  data.push([L.visScore, visPct + '%', '', visible + ' ' + L.ofSearches + ' ' + results.length + ' ' + L.searches]);
+  rowIdx++;
+
+  // Empty row
   data.push(['']);
+  rowIdx++;
 
-  // Keyword results table
-  data.push(['SEARCH', 'VISIBLE?', 'POSITION', 'WHO SHOWS UP INSTEAD', '', 'THEIR RATING', 'THEIR REVIEWS']);
+  // Header row for search results
+  var headerRow = rowIdx;
+  data.push([L.search, L.visible, L.position, L.whoInstead, '', L.theirRating, L.theirReviews]);
+  rowIdx++;
 
+  // Search results
   for (var i = 0; i < results.length; i++) {
     var r = results[i];
     var c1 = r.topCompetitors[0] || {};
@@ -1832,56 +1948,108 @@ function dlAuditExcel() {
 
     data.push([
       r.keyword,
-      r.found ? 'YES' : 'NO',
+      r.found ? L.yes : L.no,
       r.found ? '#' + r.position : '—',
       c1.name || '',
       '',
       c1.rating || '',
       c1.reviews || '',
     ]);
+    rowIdx++;
 
-    // Add second competitor on next row if invisible
     if (!r.found && c2.name) {
-      data.push([
-        '',
-        '',
-        '',
-        c2.name,
-        '',
-        c2.rating,
-        c2.reviews,
-      ]);
+      data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
+      rowIdx++;
     }
   }
 
+  // Empty rows
   data.push(['']);
   data.push(['']);
+  rowIdx += 2;
 
-  // Quick profile checks
-  data.push(['PROFILE CHECKLIST']);
+  // Yellow separator
+  var sep2Row = rowIdx;
+  data.push(['', '', '', '', '', '', '']);
+  rowIdx++;
+
+  // Empty row
+  data.push(['']);
+  rowIdx++;
+
+  // Profile checklist
+  data.push([L.checklist]);
+  rowIdx++;
+
   var photos = biz.imageCount || biz.imagesCount || 0;
   var reviews = biz.reviewsCount || 0;
   var cats = (biz.categories || []).length;
   var hasDesc = biz.description && biz.description.length > 50;
   var hasHours = biz.openingHours && biz.openingHours.length > 0;
 
-  data.push(['Photos', photos, photos >= 10 ? 'OK' : 'NEEDS MORE — competitors have 30+']);
-  data.push(['Reviews', reviews, reviews >= 20 ? 'OK' : 'NEEDS MORE — ask every customer']);
-  data.push(['Categories', cats, cats >= 3 ? 'OK' : 'ADD MORE — competitors use 3-5']);
-  data.push(['Description', hasDesc ? 'Written' : 'EMPTY', hasDesc ? 'OK' : 'WRITE ONE — 750 chars max']);
-  data.push(['Website', biz.website ? 'Has one' : 'MISSING', biz.website ? '' : 'NEEDS A WEBSITE']);
-  data.push(['Hours set', hasHours ? 'Yes' : 'NO', hasHours ? 'OK' : 'SET HOURS']);
+  data.push([L.photos, photos, photos >= 10 ? L.ok : L.needsMore]);
+  data.push([L.reviews, reviews, reviews >= 20 ? L.ok : L.askCustomers]);
+  data.push([L.categories, cats, cats >= 3 ? L.ok : L.addMore]);
+  data.push([L.description, hasDesc ? L.written : L.empty, hasDesc ? L.ok : L.writeOne]);
+  data.push([L.website, biz.website ? L.hasOne : L.missing, biz.website ? '' : L.needsWebsite]);
+  data.push([L.hoursSet, hasHours ? L.yes : L.no, hasHours ? L.ok : '']);
 
   var ws = XLSX.utils.aoa_to_sheet(data);
+
+  // Column widths
   ws['!cols'] = [
-    {wch: 28},  // A — label/keyword
-    {wch: 10},  // B — value/visible
-    {wch: 10},  // C — position
-    {wch: 40},  // D — competitor name
-    {wch: 2},   // E — spacer
-    {wch: 8},   // F — rating
-    {wch: 10},  // G — reviews
+    {wch: 32},  // A
+    {wch: 12},  // B
+    {wch: 10},  // C
+    {wch: 45},  // D
+    {wch: 2},   // E spacer
+    {wch: 8},   // F
+    {wch: 10},  // G
   ];
+
+  // ── Styling ──
+  // Title row — big bold
+  var titleCell = ws['A1'];
+  if (titleCell) titleCell.s = {font: {bold: true, sz: 22}, alignment: {horizontal: 'left'}};
+
+  // Yellow separator rows
+  for (var col = 0; col < 7; col++) {
+    var colLetter = String.fromCharCode(65 + col);
+    // Row 3 (index 2) — first separator
+    var ref1 = colLetter + '3';
+    if (!ws[ref1]) ws[ref1] = {v: '', t: 's'};
+    ws[ref1].s = {fill: {fgColor: {rgb: 'FFD700'}}};
+    // Second separator
+    var ref2 = colLetter + (sep2Row + 1);
+    if (!ws[ref2]) ws[ref2] = {v: '', t: 's'};
+    ws[ref2].s = {fill: {fgColor: {rgb: 'FFD700'}}};
+  }
+
+  // Bold the profile labels (column A rows 4-11)
+  for (var pr = 3; pr <= 11; pr++) {
+    var pRef = 'A' + (pr + 1);
+    if (ws[pRef]) ws[pRef].s = {font: {bold: true}};
+  }
+
+  // Bold visibility score
+  var vsRef = 'A' + (headerRow); // row before header
+  if (ws[vsRef]) ws[vsRef].s = {font: {bold: true, sz: 14}};
+
+  // Bold header row
+  var hdrRowNum = headerRow + 1;
+  for (var h = 0; h < 7; h++) {
+    var hRef = String.fromCharCode(65 + h) + hdrRowNum;
+    if (ws[hRef]) ws[hRef].s = {font: {bold: true}, fill: {fgColor: {rgb: 'F3F4F6'}}};
+  }
+
+  // Bold checklist header
+  // Bold NO cells in red
+  // Make GMB URL a hyperlink
+  var gmapsRowNum = 12; // row 11 = profile link (0-indexed row 10, so Excel row 11)
+  var gmapsCellRef = 'B' + gmapsRowNum;
+  if (ws[gmapsCellRef] && gmapsUrl) {
+    ws[gmapsCellRef].l = {Target: gmapsUrl, Tooltip: 'Open Google Maps profile'};
+  }
 
   XLSX.utils.book_append_sheet(wb, ws, 'Report');
 

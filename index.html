@@ -1470,8 +1470,18 @@ function checkVisibility(bizName, kwResults) {
   return {found: found, position: position, topCompetitors: comps.slice(0,3)};
 }
 
+function cleanBarrio(raw) {
+  if (!raw) return '';
+  return raw
+    .split(',')
+    .map(function(s) { return s.trim(); })
+    .filter(function(s) { return s && !/comuna/i.test(s) && !/^\d+$/.test(s); })
+    .map(function(s) { return s.replace(/^barrio\s+/i, ''); })
+    [0] || '';
+}
+
 async function detectBarrio(biz) {
-  var barrio = biz.neighborhood || biz.subLocality || '';
+  var barrio = cleanBarrio(biz.neighborhood || biz.subLocality || '');
   var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
   var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
 
@@ -1483,18 +1493,9 @@ async function detectBarrio(biz) {
       if (geoResp.ok) {
         var geoData = await geoResp.json();
         var addr = geoData.address || {};
-        barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
-        // Always clean — strip "Comuna X", "Barrio X", take first recognizable name
-        barrio = barrio
-          .split(',')
-          .map(function(s) { return s.trim(); })
-          .filter(function(s) { return s && !/comuna/i.test(s) && !/^\d+$/.test(s); })
-          .map(function(s) { return s.replace(/^barrio\s+/i, ''); })
-          [0] || '';
-        barrio = barrio.trim();
+        barrio = cleanBarrio(addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '');
       }
     } catch(e) {}
-    // Nominatim rate limit: 1 req/sec
     await sleep(1100);
   }
   if (!barrio) {

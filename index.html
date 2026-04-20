@@ -1484,18 +1484,31 @@ async function detectBarrio(biz) {
         var geoData = await geoResp.json();
         var addr = geoData.address || {};
         barrio = addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '';
-        // Clean: "Barrio Castex, Flores, Comuna 7" → "Flores"
-        // Take the most recognizable part — usually after first comma, or first part without "Barrio"/"Comuna"
-        if (barrio.includes(',')) {
-          var parts = barrio.split(',').map(function(s){return s.trim();});
-          // Filter out parts with "Comuna", "Barrio", numbers only
-          var clean = parts.filter(function(p) {
-            return p && !p.match(/^Comuna\s/i) && !p.match(/^Barrio\s/i) && !p.match(/^\d+$/);
+        // Clean up Nominatim output for Buenos Aires
+        // "Barrio Castex, Flores, Comuna 7" → "Flores"
+        // "Parque Chacabuco, Comuna 7" → "Parque Chacabuco"  
+        // "Recoleta" → "Recoleta"
+        if (barrio) {
+          // Split by comma and clean each part
+          var bParts = barrio.split(',').map(function(s){return s.trim();});
+          // Remove parts that are: "Comuna X", "Barrio X" (sub-barrio), empty, just numbers
+          var cleanParts = bParts.filter(function(p) {
+            if (!p) return false;
+            if (/^Comuna\s/i.test(p)) return false;
+            if (/^\d+$/.test(p)) return false;
+            return true;
           });
-          barrio = clean.length > 0 ? clean[clean.length > 1 ? 1 : 0] : parts[0];
+          // Strip "Barrio " prefix from remaining parts
+          cleanParts = cleanParts.map(function(p) { return p.replace(/^Barrio\s+/i, ''); });
+          // If multiple parts remain (e.g. "Castex", "Flores"), take the LAST one — it's the known barrio
+          // "Castex, Flores" → Flores is what people know
+          if (cleanParts.length > 1) {
+            barrio = cleanParts[cleanParts.length - 1];
+          } else if (cleanParts.length === 1) {
+            barrio = cleanParts[0];
+          }
+          barrio = barrio.trim();
         }
-        // Strip "Barrio " prefix if it remains
-        barrio = barrio.replace(/^Barrio\s+/i, '').trim();
       }
     } catch(e) {}
     // Nominatim rate limit: 1 req/sec

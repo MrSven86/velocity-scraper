@@ -1584,95 +1584,104 @@ async function runGMBAudit(token) {
 
   uniqueKeywords = uniqueKeywords.slice(0, 25);
 
-  setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords near ' + bizName + '...', 'info');
+  setStatus('Step 3/4 — Checking ' + uniqueKeywords.length + ' keywords in ONE search (this is fast)...', 'info');
   setProgress(30);
 
-  // Step 3: For each keyword, search Maps near the business and check if they appear
+  // Step 3: Send ALL keywords in a SINGLE Apify run
+  var searchInput = {
+    searchStringsArray: uniqueKeywords,
+    maxCrawledPlacesPerSearch: 20,
+    language: 'es',
+    maxReviews: 0,
+    maxImages: 0,
+    scrapeReviewerInfo: false,
+  };
+
+  if (bizLat && bizLng) {
+    searchInput.lat = String(bizLat);
+    searchInput.lng = String(bizLng);
+    searchInput.zoom = radius <= 1000 ? 16 : (radius <= 2000 ? 15 : 14);
+  }
+
+  var sRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
+  setStatus('Step 3/4 — Apify is searching all ' + uniqueKeywords.length + ' keywords...', 'info');
+  setProgress(50);
+  var allSearchResults = await pollRun(token, sRunId);
+
+  setStatus('Step 3/4 — Processing ' + (allSearchResults || []).length + ' results...', 'info');
+  setProgress(85);
+
+  // Group results by which keyword they came from using searchString field
+  var resultsByKeyword = {};
+  for (var k = 0; k < uniqueKeywords.length; k++) {
+    resultsByKeyword[uniqueKeywords[k]] = [];
+  }
+
+  for (var r = 0; r < (allSearchResults || []).length; r++) {
+    var place = allSearchResults[r];
+    var searchStr = (place.searchString || '').toLowerCase().trim();
+    if (resultsByKeyword[searchStr] !== undefined) {
+      resultsByKeyword[searchStr].push(place);
+    } else {
+      // Try fuzzy match — sometimes searchString has slight differences
+      for (var kk = 0; kk < uniqueKeywords.length; kk++) {
+        if (searchStr.includes(uniqueKeywords[kk]) || uniqueKeywords[kk].includes(searchStr)) {
+          resultsByKeyword[uniqueKeywords[kk]].push(place);
+          break;
+        }
+      }
+    }
+  }
+
+  // Now check visibility per keyword
   var auditResults = [];
   var bizNameLower = bizName.toLowerCase();
-  // Create variations of the name to match against
   var bizNameWords = bizNameLower.split(/\s+/).filter(function(w){return w.length > 2;});
 
   for (var i = 0; i < uniqueKeywords.length; i++) {
     var kw = uniqueKeywords[i];
-    var pct = Math.round(30 + (i / uniqueKeywords.length) * 60);
-    setStatus('(' + (i+1) + '/' + uniqueKeywords.length + ') Searching: "' + kw + '"...', 'info');
-    setProgress(pct);
+    var kwResults = resultsByKeyword[kw] || [];
 
-    try {
-      var searchInput = {
-        searchStringsArray: [kw],
-        maxCrawledPlacesPerSearch: 20,
-        language: 'es',
-        maxReviews: 0,
-        maxImages: 0,
-        scrapeReviewerInfo: false,
-      };
+    var found = false;
+    var position = -1;
+    var competitors = [];
 
-      // If we have coordinates, use them for location bias
-      if (bizLat && bizLng) {
-        searchInput.lat = String(bizLat);
-        searchInput.lng = String(bizLng);
-        searchInput.zoom = radius <= 1000 ? 16 : (radius <= 2000 ? 15 : 14);
+    for (var j = 0; j < kwResults.length; j++) {
+      var p = kwResults[j];
+      var placeName = (p.title || '').toLowerCase();
+
+      var isMatch = placeName === bizNameLower ||
+        placeName.includes(bizNameLower) ||
+        bizNameLower.includes(placeName);
+
+      if (!isMatch && bizNameWords.length > 1) {
+        var matchCount = 0;
+        for (var w = 0; w < bizNameWords.length; w++) {
+          if (placeName.includes(bizNameWords[w])) matchCount++;
+        }
+        if (matchCount >= bizNameWords.length * 0.6) isMatch = true;
       }
 
-      var sRunId = await startActor(token, 'compass~crawler-google-places', searchInput);
-      var searchResults = await pollRun(token, sRunId);
-
-      // Check if our business appears in results
-      var found = false;
-      var position = -1;
-      var competitors = [];
-
-      for (var r = 0; r < (searchResults || []).length; r++) {
-        var place = searchResults[r];
-        var placeName = (place.title || '').toLowerCase();
-
-        // Check if this is our business (fuzzy match)
-        var isMatch = placeName === bizNameLower ||
-          placeName.includes(bizNameLower) ||
-          bizNameLower.includes(placeName);
-
-        // Also check if most words match
-        if (!isMatch && bizNameWords.length > 1) {
-          var matchCount = 0;
-          for (var w = 0; w < bizNameWords.length; w++) {
-            if (placeName.includes(bizNameWords[w])) matchCount++;
-          }
-          if (matchCount >= bizNameWords.length * 0.6) isMatch = true;
-        }
-
-        if (isMatch && !found) {
-          found = true;
-          position = r + 1;
-        } else {
-          competitors.push({
-            name: place.title || '',
-            rating: place.totalScore || 0,
-            reviews: place.reviewsCount || 0,
-            category: place.categoryName || '',
-          });
-        }
+      if (isMatch && !found) {
+        found = true;
+        position = j + 1;
+      } else {
+        competitors.push({
+          name: p.title || '',
+          rating: p.totalScore || 0,
+          reviews: p.reviewsCount || 0,
+          category: p.categoryName || '',
+        });
       }
-
-      auditResults.push({
-        keyword: kw,
-        found: found,
-        position: position,
-        totalResults: (searchResults || []).length,
-        topCompetitors: competitors.slice(0, 5),
-      });
-
-    } catch(err) {
-      auditResults.push({
-        keyword: kw,
-        found: false,
-        position: -1,
-        totalResults: 0,
-        topCompetitors: [],
-        error: err.message,
-      });
     }
+
+    auditResults.push({
+      keyword: kw,
+      found: found,
+      position: position,
+      totalResults: kwResults.length,
+      topCompetitors: competitors.slice(0, 5),
+    });
   }
 
   setProgress(95);

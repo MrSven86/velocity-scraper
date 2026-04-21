@@ -2696,6 +2696,8 @@ function dlAdvancedExcel() {
   var vis = results.filter(function(r){return r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
   var cats = biz.categories || [];
+  var yourCatSet = {};
+  cats.forEach(function(c){yourCatSet[c]=true;});
 
   var wb = XLSX.utils.book_new();
   var data = [];

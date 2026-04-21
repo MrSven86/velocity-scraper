@@ -1561,17 +1561,51 @@ async function runGMBAudit(token) {
 
   if (!allProfiles || allProfiles.length === 0) throw new Error('Could not scrape any profiles. Check URLs.');
 
-  setStatus('Step 1/3 — Got ' + allProfiles.length + ' profiles. Detecting neighborhoods...', 'info');
+  // Match profiles back to input URLs (Apify doesn't guarantee order)
+  var matchedProfiles = [];
+  for (var ui = 0; ui < urls.length; ui++) {
+    var inputUrl = urls[ui];
+    // Try to find matching profile by checking if the scraped URL or placeId matches
+    var matched = null;
+    for (var pi = 0; pi < allProfiles.length; pi++) {
+      var prof = allProfiles[pi];
+      // Check if the input URL contains the place name or placeId
+      var profUrl = prof.url || '';
+      var profPlaceId = prof.placeId || '';
+      if (profUrl && inputUrl.includes(profPlaceId) && profPlaceId) {
+        matched = prof;
+        break;
+      }
+      // Fuzzy: check if place name appears in input URL
+      var profName = (prof.title || '').replace(/\s+/g, '+');
+      if (profName && inputUrl.includes(profName.slice(0, 15))) {
+        matched = prof;
+        break;
+      }
+    }
+    // Fallback: just use index order if no match found
+    if (!matched && allProfiles[ui]) {
+      matched = allProfiles[ui];
+    }
+    if (matched) {
+      if (!matched.url) matched.url = inputUrl;
+      matched._inputUrl = inputUrl;
+      matchedProfiles.push(matched);
+    }
+  }
+
+  if (matchedProfiles.length === 0) matchedProfiles = allProfiles;
+
+  setStatus('Step 1/3 — Got ' + matchedProfiles.length + ' profiles. Detecting neighborhoods...', 'info');
   setProgress(35);
 
   // ═══ STEP 2: Detect barrios + build keywords for each business ═══
   var businesses = [];
-  var allSearchKeywords = []; // master list of ALL keywords across all businesses
-  var bizKeywordMap = []; // tracks which keywords belong to which business
+  var allSearchKeywords = [];
+  var bizKeywordMap = [];
 
-  for (var i = 0; i < allProfiles.length; i++) {
-    var biz = allProfiles[i];
-    if (!biz.url) biz.url = urls[i] || '';
+  for (var i = 0; i < matchedProfiles.length; i++) {
+    var biz = matchedProfiles[i];
 
     setStatus('Step 2/3 — Detecting barrio for ' + (biz.title || 'business ' + (i+1)) + '...', 'info');
 

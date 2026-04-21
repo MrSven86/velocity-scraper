@@ -1700,27 +1700,33 @@ async function runGMBAudit(token) {
     allAudits.push({biz: b.biz, results: auditResults, barrio: b.barrio});
   }
 
-  // ═══ ADVANCED: Scrape #1 competitor's full profile ═══
-  var topCompetitorProfile = null;
+  // ═══ ADVANCED: Scrape top competitors' full profiles ═══
+  var topCompetitorProfiles = [];
   if (isAdvanced && allAudits.length === 1) {
+    // Collect unique competitor names from all keyword results (top 7)
+    var compNames = [];
+    var compSeen = {};
     var mainResults = allAudits[0].results;
-    // Find the #1 competitor from the first keyword search
-    var topComp = null;
     for (var ti = 0; ti < mainResults.length; ti++) {
-      if (mainResults[ti].topCompetitors && mainResults[ti].topCompetitors.length > 0) {
-        topComp = mainResults[ti].topCompetitors[0];
-        break;
+      var tComps = mainResults[ti].topCompetitors || [];
+      for (var tj = 0; tj < tComps.length; tj++) {
+        var cn = tComps[tj].name;
+        if (cn && !compSeen[cn]) {
+          compSeen[cn] = true;
+          compNames.push(cn);
+        }
+        if (compNames.length >= 7) break;
       }
+      if (compNames.length >= 7) break;
     }
 
-    if (topComp && topComp.name) {
-      setStatus('Advanced: Scraping #1 competitor profile — ' + topComp.name + '...', 'info');
+    if (compNames.length > 0) {
+      setStatus('Advanced: Scraping top ' + compNames.length + ' competitor profiles...', 'info');
       setProgress(92);
 
-      // Search for the competitor to get their Maps URL
       try {
         var compSearchInput = {
-          searchStringsArray: [topComp.name],
+          searchStringsArray: compNames,
           maxCrawledPlacesPerSearch: 1,
           language: 'es',
           maxReviews: 0,
@@ -1734,7 +1740,7 @@ async function runGMBAudit(token) {
         var compRunId = await startActor(token, 'compass~crawler-google-places', compSearchInput);
         var compResults = await pollRun(token, compRunId);
         if (compResults && compResults.length > 0) {
-          topCompetitorProfile = compResults[0];
+          topCompetitorProfiles = compResults;
         }
       } catch(e) { /* silent */ }
     }
@@ -1745,7 +1751,8 @@ async function runGMBAudit(token) {
 
   window._allAudits = allAudits;
   if (isAdvanced && allAudits.length === 1) {
-    allAudits[0].topCompetitor = topCompetitorProfile;
+    allAudits[0].topCompetitor = topCompetitorProfiles[0] || null;
+    allAudits[0].topCompetitors = topCompetitorProfiles;
     renderAdvancedAudit(allAudits[0]);
   } else {
     renderBulkAudit(allAudits);
@@ -2244,6 +2251,9 @@ function renderAdvancedAudit(audit) {
   if (comp) {
     tabs += '<button class="tab" onclick="switchAdvTab(\'comparison\',this)">vs #1</button>';
   }
+  if (audit.topCompetitors && audit.topCompetitors.length > 0) {
+    tabs += '<button class="tab" onclick="switchAdvTab(\'competitors\',this)">' + (isES ? 'Competidores' : 'Competitors') + ' (' + audit.topCompetitors.length + ')</button>';
+  }
   tabs += '<button class="tab" onclick="switchAdvTab(\'profile\',this)">' + (isES ? 'Perfil' : 'Profile') + '</button>';
   document.getElementById('result-tabs').innerHTML = tabs;
 
@@ -2263,6 +2273,7 @@ function switchAdvTab(tab, btn) {
   if (tab === 'checklist') renderAdvChecklist(window._advChecks);
   else if (tab === 'visibility') renderAdvVisibility(window._advAudit);
   else if (tab === 'comparison') renderComparison(window._advAudit);
+  else if (tab === 'competitors') renderCompetitorAnalysis(window._advAudit);
   else if (tab === 'profile') renderAuditProfile();
 }
 
@@ -2272,108 +2283,176 @@ function buildGMBChecklist(biz, results, isES) {
   var vis = results.filter(function(r){return r.found;}).length;
   var photos = biz.imageCount || biz.imagesCount || 0;
   var reviews = biz.reviewsCount || 0;
-  var hasDesc = biz.description && biz.description.length > 50;
+  var hasDesc = biz.description && biz.description.length >= 200;
+  var shortDesc = biz.description && biz.description.length > 0 && biz.description.length < 200;
   var hasHours = biz.openingHours && biz.openingHours.length > 0;
   var hasWebsite = biz.website && biz.website.trim() !== '';
   var hasPhone = biz.phone && biz.phone.trim() !== '';
+  var hasAddress = biz.address && biz.address.trim() !== '';
 
-  var isClaimed = !(biz.claimStatus === 'unclaimed' || biz.isAdvertiser === false);
-  checks.push({
-    step: 1, label: isES ? 'Perfil reclamado' : 'Profile claimed',
-    ok: isClaimed,
-    value: isClaimed ? (isES ? 'Reclamado' : 'Claimed') : (isES ? 'NO RECLAMADO' : 'NOT CLAIMED'),
-    tip: isClaimed ? '' : (isES ? 'Reclamar el perfil inmediatamente en business.google.com' : 'Claim the profile immediately at business.google.com'),
-  });
-
-  checks.push({
-    step: 3, label: isES ? 'Categoría principal' : 'Primary category',
-    ok: !!(biz.categoryName),
-    value: biz.categoryName || (isES ? 'NO CONFIGURADA' : 'NOT SET'),
-    tip: biz.categoryName ? (isES ? 'Verificar que coincida con los top 3 competidores' : 'Verify it matches top 3 competitors') : (isES ? 'Configurar la categoría principal — es el factor #1 de ranking' : 'Set primary category — #1 ranking factor'),
-  });
-
-  checks.push({
-    step: 4, label: isES ? 'Categorías secundarias' : 'Secondary categories',
-    ok: cats.length >= 3,
-    value: cats.length <= 1 ? (isES ? 'NINGUNA' : 'NONE') : (cats.length - 1) + (isES ? ' categorías' : ' categories'),
-    tip: cats.length >= 3 ? cats.join(', ') : (isES ? 'Agregar categorías secundarias — competidores usan 3-5' : 'Add secondary categories — competitors use 3-5'),
-  });
-
-  var nameWords = (biz.title || '').split(/\s+/).length;
-  var hasKeywordStuffing = nameWords > 8;
-  checks.push({
-    step: 5, label: isES ? 'Nombre del negocio' : 'Business name',
-    ok: !hasKeywordStuffing && !!(biz.title),
-    value: biz.title || (isES ? 'SIN NOMBRE' : 'NO NAME'),
-    tip: hasKeywordStuffing ? (isES ? 'Posible keyword stuffing — riesgo de suspensión' : 'Possible keyword stuffing — suspension risk') : '',
-  });
-
-  checks.push({
-    step: 6, label: isES ? 'Descripción' : 'Description',
-    ok: hasDesc,
-    value: hasDesc ? ((biz.description.length) + (isES ? ' caracteres' : ' chars')) : (isES ? 'VACÍA' : 'EMPTY'),
-    tip: hasDesc ? '' : (isES ? 'Escribir descripción — 750 caracteres máx, mencionar el barrio' : 'Write description — 750 chars max, mention the neighborhood'),
-  });
-
-  checks.push({
-    step: 7, label: isES ? 'Teléfono' : 'Phone',
+  // ═══ SECTION A: BASICS ═══
+  checks.push({section: 'A', step: 'A1', label: isES ? 'Teléfono' : 'Phone number',
     ok: hasPhone,
     value: hasPhone ? biz.phone : (isES ? 'FALTA' : 'MISSING'),
-    tip: hasPhone ? '' : (isES ? 'Agregar número de teléfono' : 'Add phone number'),
+    action: isES ? 'Agregar número de teléfono' : 'Add phone number',
   });
 
-  checks.push({
-    step: 7, label: isES ? 'Sitio web' : 'Website',
-    ok: hasWebsite,
-    value: hasWebsite ? biz.website : (isES ? 'SIN SITIO WEB' : 'NO WEBSITE'),
-    tip: hasWebsite ? '' : (isES ? 'Necesita un sitio web — oportunidad de venta' : 'Needs a website — sales opportunity'),
+  checks.push({section: 'A', step: 'A2', label: isES ? 'Dirección' : 'Address',
+    ok: hasAddress,
+    value: hasAddress ? biz.address : (isES ? 'FALTA' : 'MISSING'),
+    action: isES ? 'Agregar dirección precisa' : 'Add accurate address',
   });
 
-  checks.push({
-    step: 8, label: isES ? 'Horarios' : 'Business hours',
+  checks.push({section: 'A', step: 'A3', label: isES ? 'Horarios de atención' : 'Opening hours',
     ok: hasHours,
     value: hasHours ? (isES ? 'Configurados' : 'Set') : (isES ? 'NO CONFIGURADOS' : 'NOT SET'),
-    tip: hasHours ? '' : (isES ? 'Configurar horarios — Google muestra más negocios con horarios' : 'Set hours — Google shows more businesses with hours set'),
+    action: isES ? 'Configurar horarios correctos' : 'Set correct opening hours',
   });
 
-  checks.push({
-    step: 11, label: isES ? 'Fotos' : 'Photos',
+  checks.push({section: 'A', step: 'A4', label: isES ? 'Descripción del negocio (mín 200 chars)' : 'Business description (min 200 chars)',
+    ok: hasDesc,
+    value: hasDesc ? (biz.description.length + (isES ? ' caracteres ✓' : ' chars ✓')) : (shortDesc ? (biz.description.length + (isES ? ' caracteres — muy corta' : ' chars — too short')) : (isES ? 'VACÍA' : 'EMPTY')),
+    action: hasDesc ? '' : (isES ? 'Escribir descripción de mín 200 caracteres (244 se muestran)' : 'Write description of min 200 chars (244 shown)'),
+  });
+
+  // Opening date / years in business
+  var hasYears = biz.yearsInBusiness || biz.openingDate;
+  checks.push({section: 'A', step: 'A5', label: isES ? 'Fecha de apertura (años en el negocio)' : 'Opening date (years in business)',
+    ok: !!hasYears,
+    value: hasYears ? (biz.yearsInBusiness ? biz.yearsInBusiness + (isES ? ' años' : ' years') : (isES ? 'Configurada' : 'Set')) : (isES ? 'NO CONFIGURADA' : 'NOT SET'),
+    action: hasYears ? '' : (isES ? 'Agregar fecha de apertura — Google muestra "X años en el negocio"' : 'Add opening date — Google shows "X years in business"'),
+  });
+
+  // Service areas
+  var hasServiceAreas = biz.serviceArea || biz.serviceAreas;
+  checks.push({section: 'A', step: 'A6', label: isES ? 'Áreas de servicio' : 'Service areas',
+    ok: !!hasServiceAreas,
+    value: hasServiceAreas ? (isES ? 'Configuradas' : 'Set') : (isES ? 'SIN ÁREAS DE SERVICIO' : 'NO SERVICE AREAS'),
+    action: hasServiceAreas ? '' : (isES ? 'Agregar áreas de servicio' : 'Add service areas'),
+  });
+
+  // Photos + cover photo + logo
+  checks.push({section: 'A', step: 'A7', label: isES ? 'Fotos (mínimo 10)' : 'Photos (minimum 10)',
     ok: photos >= 10,
     value: photos + (isES ? ' fotos' : ' photos'),
-    tip: photos >= 10 ? '' : (isES ? 'Subir más fotos — mínimo 10, competidores tienen 30+' : 'Upload more photos — minimum 10, competitors have 30+'),
+    action: photos >= 10 ? '' : (isES ? 'Subir más fotos — mínimo 10, competidores tienen 30+. Foto de portada: 1024x576px' : 'Upload more photos — minimum 10, competitors have 30+. Cover photo: 1024x576px'),
   });
 
-  checks.push({
-    step: 16, label: isES ? 'Reseñas' : 'Reviews',
+  var hasLogo = biz.logoUrl || biz.logo;
+  checks.push({section: 'A', step: 'A8', label: 'Logo',
+    ok: !!hasLogo,
+    value: hasLogo ? '✓' : (isES ? 'SIN LOGO' : 'NO LOGO'),
+    action: hasLogo ? '' : (isES ? 'Agregar logo — 720x720px PNG' : 'Add logo — 720x720px PNG'),
+  });
+
+  // Services/products
+  var hasServices = biz.additionalInfo || biz.services;
+  checks.push({section: 'A', step: 'A9', label: isES ? 'Servicios / Productos' : 'Services / Products',
+    ok: !!hasServices,
+    value: hasServices ? (isES ? 'Tiene servicios' : 'Has services') : (isES ? 'SIN SERVICIOS' : 'NO SERVICES'),
+    action: hasServices ? '' : (isES ? 'Agregar 3-5 servicios con descripción + 3-5 productos con precio fijo' : 'Add 3-5 services with descriptions + 3-5 fixed price products'),
+  });
+
+  // Posts/updates
+  var hasPosts = biz.posts || biz.updatesCount;
+  checks.push({section: 'A', step: 'A10', label: isES ? 'Publicaciones / Actualizaciones' : 'Posts / Updates',
+    ok: !!hasPosts,
+    value: hasPosts ? (isES ? 'Tiene publicaciones' : 'Has posts') : (isES ? 'SIN PUBLICACIONES' : 'NO POSTS'),
+    action: hasPosts ? '' : (isES ? 'Agregar publicaciones regulares, fotos y actualizaciones' : 'Add regular posts, photos and updates'),
+  });
+
+  // ═══ SECTION B: CATEGORY & TITLE ═══
+  checks.push({section: 'B', step: 'B1', label: isES ? 'Categoría principal' : 'Primary category',
+    ok: !!(biz.categoryName),
+    value: biz.categoryName || (isES ? 'NO CONFIGURADA' : 'NOT SET'),
+    action: biz.categoryName ? (isES ? 'Verificar vs competidores' : 'Verify vs competitors') : (isES ? 'Configurar categoría principal — factor #1 de ranking' : 'Set primary category — #1 ranking factor'),
+  });
+
+  checks.push({section: 'B', step: 'B2', label: isES ? 'Categorías secundarias (mín 3)' : 'Secondary categories (min 3)',
+    ok: cats.length >= 4,
+    value: cats.length <= 1 ? (isES ? 'NINGUNA' : 'NONE') : (cats.length - 1) + (isES ? ' secundarias' : ' secondary'),
+    action: cats.length >= 4 ? cats.join(', ') : (isES ? 'Agregar 3-5 categorías secundarias. Actuales: ' + (cats.join(', ') || 'ninguna') : 'Add 3-5 secondary categories. Current: ' + (cats.join(', ') || 'none')),
+  });
+
+  // Check if category keyword + barrio is in the title
+  var titleLower = (biz.title || '').toLowerCase();
+  var catLower = (biz.categoryName || '').toLowerCase();
+  var barrio = (biz._barrio || '').toLowerCase();
+  var hasCatInTitle = catLower && titleLower.includes(catLower);
+  var hasBarrioInTitle = barrio && titleLower.includes(barrio);
+  var titleStatus = '';
+  if (hasCatInTitle && hasBarrioInTitle) titleStatus = isES ? 'Categoría + barrio en título ✓' : 'Category + neighborhood in title ✓';
+  else if (hasCatInTitle) titleStatus = isES ? 'Categoría en título ✓, falta barrio' : 'Category in title ✓, missing neighborhood';
+  else if (hasBarrioInTitle) titleStatus = isES ? 'Barrio en título ✓, falta categoría' : 'Neighborhood in title ✓, missing category';
+  else titleStatus = isES ? 'Ni categoría ni barrio en título' : 'Neither category nor neighborhood in title';
+
+  checks.push({section: 'B', step: 'B3', label: isES ? 'Keywords en el título del negocio' : 'Keywords in business title',
+    ok: hasCatInTitle,
+    value: titleStatus,
+    action: hasCatInTitle ? '' : (isES ? 'Considerar agregar categoría y barrio al título (ej: "Plomero Palermo")' : 'Consider adding category and neighborhood to title (e.g. "Plumber Palermo")'),
+  });
+
+  // ═══ SECTION C: REVIEWS ═══
+  checks.push({section: 'C', step: 'C1', label: isES ? 'Cantidad de reseñas' : 'Number of reviews',
     ok: reviews >= 20,
-    value: reviews + (isES ? ' reseñas' : ' reviews') + ' (' + (biz.totalScore || 0) + ' ★)',
-    tip: reviews >= 20 ? '' : (isES ? 'Necesita más reseñas — pedir a cada cliente' : 'Needs more reviews — ask every customer'),
+    value: reviews + (isES ? ' reseñas' : ' reviews'),
+    action: reviews >= 20 ? '' : (isES ? 'Necesita más reseñas — configurar sistema de solicitud automática' : 'Needs more reviews — set up automatic review request system'),
   });
 
-  checks.push({
-    step: 0, label: isES ? 'Visibilidad en búsquedas' : 'Search visibility',
+  checks.push({section: 'C', step: 'C2', label: isES ? 'Calificación general' : 'Overall rating',
+    ok: (biz.totalScore || 0) >= 4.0,
+    value: (biz.totalScore || 0) + ' ★',
+    action: (biz.totalScore || 0) >= 4.0 ? '' : (isES ? 'Calificación baja — implementar sistema de reseñas filtradas (solo 4-5 ★)' : 'Low rating — implement filtered review system (only 4-5 ★)'),
+  });
+
+  // ═══ SECTION D: WEBSITE ═══
+  checks.push({section: 'D', step: 'D', label: isES ? 'Sitio web' : 'Website',
+    ok: hasWebsite,
+    value: hasWebsite ? biz.website : (isES ? 'SIN SITIO WEB' : 'NO WEBSITE'),
+    action: hasWebsite ?
+      (isES ? 'Verificar: categoría en H1, horarios visibles, dirección visible, mismo teléfono' : 'Verify: category in H1, hours visible, address visible, same phone number') :
+      (isES ? '⚡ OPORTUNIDAD: Necesita sitio web — agregar categoría en H1, horarios, dirección, teléfono' : '⚡ OPPORTUNITY: Needs website — add category in H1, hours, address, phone'),
+  });
+
+  // ═══ VISIBILITY ═══
+  checks.push({section: 'V', step: 'V', label: isES ? 'Visibilidad en búsquedas' : 'Search visibility',
     ok: vis > results.length * 0.5,
     value: vis + '/' + results.length + ' (' + Math.round(vis/results.length*100) + '%)',
-    tip: vis <= results.length * 0.5 ? (isES ? 'Invisible en la mayoría de búsquedas' : 'Invisible in most searches') : '',
+    action: vis <= results.length * 0.5 ? (isES ? 'Invisible en la mayoría de búsquedas — necesita optimización completa' : 'Invisible in most searches — needs full optimization') : '',
   });
 
   return checks;
 }
 
 function renderAdvChecklist(checks) {
-  var html = '<div style="margin-bottom:12px;font-size:14px;color:#666;">Checklist basada en los 20 pasos de optimización GMB</div>';
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+  var sectionNames = {
+    'A': isES ? 'A — DATOS BÁSICOS DEL PERFIL' : 'A — PROFILE BASICS',
+    'B': isES ? 'B — CATEGORÍA Y TÍTULO' : 'B — CATEGORY & TITLE',
+    'C': isES ? 'C — RESEÑAS' : 'C — REVIEWS',
+    'D': isES ? 'D — SITIO WEB' : 'D — WEBSITE',
+    'V': isES ? 'VISIBILIDAD' : 'VISIBILITY',
+  };
+
+  var html = '';
+  var lastSection = '';
 
   for (var i = 0; i < checks.length; i++) {
     var c = checks[i];
+    if (c.section !== lastSection) {
+      lastSection = c.section;
+      html += '<div style="margin-top:16px;margin-bottom:8px;font-weight:700;font-size:14px;color:#333;border-bottom:2px solid #e5e7eb;padding-bottom:4px;">' + (sectionNames[c.section] || c.section) + '</div>';
+    }
+
     var icon = c.ok ? '✅' : '❌';
-    var stepLabel = c.step > 0 ? 'Paso ' + c.step + ': ' : '';
     html += '<div style="padding:10px 12px;margin-bottom:4px;background:' + (c.ok ? '#f0fdf4' : '#fef2f2') + ';border-radius:6px;border-left:4px solid ' + (c.ok ? '#16a34a' : '#dc2626') + ';">';
     html += '<div style="display:flex;justify-content:space-between;align-items:center;">';
-    html += '<span style="font-weight:600;">' + icon + ' ' + stepLabel + c.label + '</span>';
-    html += '<span style="font-size:13px;color:' + (c.ok ? '#166534' : '#dc2626') + ';font-weight:600;">' + c.value + '</span>';
+    html += '<span style="font-weight:600;">' + icon + ' ' + c.step + ' ' + c.label + '</span>';
+    html += '<span style="font-size:13px;color:' + (c.ok ? '#166534' : '#dc2626') + ';font-weight:600;max-width:50%;text-align:right;">' + c.value + '</span>';
     html += '</div>';
-    if (c.tip) {
-      html += '<div style="font-size:12px;color:#666;margin-top:4px;">→ ' + c.tip + '</div>';
+    if (c.action) {
+      html += '<div style="font-size:12px;color:#666;margin-top:4px;">→ ' + c.action + '</div>';
     }
     html += '</div>';
   }
@@ -2496,6 +2575,115 @@ function renderComparison(audit) {
   });
 }
 
+function renderCompetitorAnalysis(audit) {
+  var biz = audit.biz;
+  var comps = audit.topCompetitors || [];
+  var lang = document.getElementById('audit-lang').value;
+  var isES = lang === 'es';
+  var yourCats = biz.categories || [];
+  var yourCatSet = {};
+  yourCats.forEach(function(c){yourCatSet[c]=true;});
+
+  var html = '<div style="font-weight:700;font-size:16px;margin-bottom:12px;">' +
+    (isES ? 'Análisis de Competidores — Top ' + comps.length + ' en el área' : 'Competitor Analysis — Top ' + comps.length + ' in the area') + '</div>';
+
+  // Table of competitors
+  html += '<div style="overflow-x:auto;">';
+  html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
+  html += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">#</th><th style="padding:8px;text-align:left;">' + (isES ? 'Nombre' : 'Name') + '</th><th style="padding:8px;">' + (isES ? 'Cat. Principal' : 'Primary Cat.') + '</th><th style="padding:8px;">' + (isES ? 'Secundarias' : 'Secondary') + '</th><th style="padding:8px;">★</th><th style="padding:8px;">' + (isES ? 'Reseñas' : 'Reviews') + '</th><th style="padding:8px;">' + (isES ? 'Fotos' : 'Photos') + '</th></tr>';
+
+  var allCatPool = {};
+  var primaryPool = {};
+
+  for (var i = 0; i < comps.length; i++) {
+    var c = comps[i];
+    var cCats = c.categories || [];
+    var primary = c.categoryName || cCats[0] || '';
+    var secondary = cCats.slice(1).join(', ') || '—';
+    var bg = i % 2 === 0 ? '#fff' : '#f9fafb';
+
+    // Track category pools
+    if (primary) {
+      if (!primaryPool[primary]) primaryPool[primary] = 0;
+      primaryPool[primary]++;
+    }
+    cCats.forEach(function(cat) {
+      if (!allCatPool[cat]) allCatPool[cat] = 0;
+      allCatPool[cat]++;
+    });
+
+    html += '<tr style="background:' + bg + ';">';
+    html += '<td style="padding:6px 8px;font-weight:700;">' + (i+1) + '</td>';
+    html += '<td style="padding:6px 8px;">' + (c.title || c.name || '') + '</td>';
+    html += '<td style="padding:6px 8px;font-weight:600;">' + primary + '</td>';
+    html += '<td style="padding:6px 8px;font-size:11px;max-width:200px;">' + secondary + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;">' + (c.totalScore || '') + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;">' + (c.reviewsCount || '') + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;">' + (c.imageCount || c.imagesCount || '') + '</td>';
+    html += '</tr>';
+  }
+  html += '</table></div>';
+
+  // Primary category summary
+  var primaryList = Object.keys(primaryPool).sort(function(a,b){return primaryPool[b]-primaryPool[a];});
+  html += '<div style="margin-top:16px;padding:12px;background:#f0f9ff;border-radius:8px;border-left:4px solid #3b82f6;">';
+  html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Categorías principales usadas por competidores:' : 'Primary categories used by competitors:') + '</div>';
+  primaryList.forEach(function(cat) {
+    var isYours = yourCatSet[cat];
+    html += '<div style="font-size:13px;padding:2px 0;">' + cat + ' — ' + primaryPool[cat] + (isES ? ' competidores' : ' competitors') + (isYours ? ' ✓' : '') + '</div>';
+  });
+  html += '</div>';
+
+  // Full category pool
+  var allCatList = Object.keys(allCatPool).sort(function(a,b){return allCatPool[b]-allCatPool[a];});
+  var missingCats = allCatList.filter(function(c){return !yourCatSet[c];});
+
+  if (missingCats.length > 0) {
+    html += '<div style="margin-top:12px;padding:12px;background:#fef2f2;border-radius:8px;border-left:4px solid #dc2626;">';
+    html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:') + '</div>';
+    missingCats.forEach(function(cat) {
+      html += '<div style="font-size:13px;padding:2px 0;">→ ' + cat + ' (' + allCatPool[cat] + (isES ? ' competidores' : ' competitors') + ')</div>';
+    });
+    html += '</div>';
+  }
+
+  // Your current categories
+  html += '<div style="margin-top:12px;padding:12px;background:#f0fdf4;border-radius:8px;border-left:4px solid #16a34a;">';
+  html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Sus categorías actuales:' : 'Your current categories:') + '</div>';
+  if (yourCats.length > 0) {
+    yourCats.forEach(function(cat,i) {
+      html += '<div style="font-size:13px;padding:2px 0;">' + (i===0 ? '★ ' : '  ') + cat + (i===0 ? (isES ? ' (principal)' : ' (primary)') : '') + '</div>';
+    });
+  } else {
+    html += '<div style="font-size:13px;color:#dc2626;">' + (isES ? 'Sin categorías configuradas' : 'No categories set') + '</div>';
+  }
+  html += '</div>';
+
+  // Recommendation
+  html += '<div style="margin-top:12px;padding:12px;background:#fff8e1;border-radius:8px;border-left:4px solid #f59e0b;">';
+  html += '<div style="font-weight:700;margin-bottom:6px;">💡 ' + (isES ? 'Recomendación:' : 'Recommendation:') + '</div>';
+  var recPrimary = primaryList[0] || biz.categoryName || '';
+  var recSecondary = missingCats.slice(0, 5);
+  html += '<div style="font-size:13px;">' + (isES ? 'Categoría principal recomendada: ' : 'Recommended primary category: ') + '<strong>' + recPrimary + '</strong></div>';
+  if (recSecondary.length > 0) {
+    html += '<div style="font-size:13px;margin-top:4px;">' + (isES ? 'Secundarias sugeridas:' : 'Suggested secondary:') + '</div>';
+    recSecondary.forEach(function(cat) {
+      html += '<div style="font-size:13px;padding:1px 0;">  → ' + cat + '</div>';
+    });
+  }
+  // Check if recommended primary is in business name
+  var titleLower = (biz.title || '').toLowerCase();
+  var recInTitle = recPrimary && titleLower.includes(recPrimary.toLowerCase());
+  html += '<div style="font-size:13px;margin-top:6px;">' + (isES ? 'Keyword en título: ' : 'Keyword in title: ') + (recInTitle ? '✓ ' + (isES ? 'Sí' : 'Yes') : '✗ ' + (isES ? 'No — considerar agregar' : 'No — consider adding')) + '</div>';
+  html += '</div>';
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
+}
+
 function dlAdvancedExcel() {
   var audit = window._advAudit;
   var checks = window._advChecks;
@@ -2541,10 +2729,10 @@ function dlAdvancedExcel() {
   for (var i = 0; i < checks.length; i++) {
     var c = checks[i];
     data.push([
-      c.step > 0 ? c.step : '',
+      c.step || '',
       c.label,
-      c.ok ? '✓ OK' : '✗ ' + c.value,
-      c.tip || '',
+      c.ok ? '✓ ' + c.value : '✗ ' + c.value,
+      c.action || '',
     ]);
   }
 
@@ -2614,26 +2802,58 @@ function dlAdvancedExcel() {
     data.push([isES ? 'Sitio web' : 'Website', biz.website ? (isES ? 'Sí' : 'Yes') : 'No', comp.website ? (isES ? 'Sí' : 'Yes') : 'No']);
     data.push([isES ? 'Horarios' : 'Hours', (biz.openingHours&&biz.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No', (comp.openingHours&&comp.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No']);
     data.push([isES ? 'Teléfono' : 'Phone', biz.phone||'No', comp.phone||'No']);
+  }
 
-    // Their categories
-    var theirCats = comp.categories || [];
-    if (theirCats.length > 0) {
-      data.push(['']);
-      data.push([isES ? 'Categorías de #1:' : 'Categories of #1:', theirCats.join(', ')]);
+  // ═══ FULL COMPETITOR TABLE ═══
+  var allComps = audit.topCompetitors || [];
+  if (allComps.length > 0) {
+    data.push(['']);
+    data.push(['═══════════════════════════════════════════════════════']);
+    data.push([isES ? 'TOP COMPETIDORES EN EL ÁREA' : 'TOP COMPETITORS IN THE AREA']);
+    data.push(['']);
+    data.push(['#', isES ? 'Nombre' : 'Name', isES ? 'Cat. Principal' : 'Primary Cat.', isES ? 'Categorías Secundarias' : 'Secondary Categories', '', '★', isES ? 'Reseñas' : 'Reviews']);
+
+    var allCatPoolExcel = {};
+    var primaryPoolExcel = {};
+
+    for (var ci = 0; ci < allComps.length; ci++) {
+      var cc = allComps[ci];
+      var ccCats = cc.categories || [];
+      var ccPrimary = cc.categoryName || ccCats[0] || '';
+      var ccSecondary = ccCats.slice(1).join(', ') || '';
+
+      if (ccPrimary) { if (!primaryPoolExcel[ccPrimary]) primaryPoolExcel[ccPrimary] = 0; primaryPoolExcel[ccPrimary]++; }
+      ccCats.forEach(function(cat) { if (!allCatPoolExcel[cat]) allCatPoolExcel[cat] = 0; allCatPoolExcel[cat]++; });
+
+      data.push([ci+1, cc.title || '', ccPrimary, ccSecondary, '', cc.totalScore || '', cc.reviewsCount || '']);
     }
 
-    // Missing categories
-    var yourCatSet = {};
-    cats.forEach(function(c){yourCatSet[c]=true;});
-    var missing = theirCats.filter(function(c){return !yourCatSet[c];});
-    if (missing.length > 0) {
-      data.push([isES ? 'Categorías que #1 tiene y usted NO:' : 'Categories #1 has that you DON\'T:']);
-      missing.forEach(function(c){ data.push(['  → ' + c]); });
-    }
+    // Category pool + recommendations
+    data.push(['']);
+    data.push([isES ? 'CATEGORÍAS DISPONIBLES EN EL ÁREA' : 'AVAILABLE CATEGORIES IN THE AREA']);
+    var allCatListExcel = Object.keys(allCatPoolExcel).sort(function(a,b){return allCatPoolExcel[b]-allCatPoolExcel[a];});
+    allCatListExcel.forEach(function(cat) {
+      var yours = yourCatSet[cat] ? ' ✓ ' + (isES ? '(usted la tiene)' : '(you have it)') : '';
+      data.push([cat, allCatPoolExcel[cat] + (isES ? ' competidores' : ' competitors'), yours]);
+    });
+
+    // Recommendation
+    data.push(['']);
+    data.push([isES ? 'RECOMENDACIÓN' : 'RECOMMENDATION']);
+    var recPrimary = Object.keys(primaryPoolExcel).sort(function(a,b){return primaryPoolExcel[b]-primaryPoolExcel[a];})[0] || biz.categoryName || '';
+    var yourCatSet2 = {};
+    cats.forEach(function(c){yourCatSet2[c]=true;});
+    var recSecondary = allCatListExcel.filter(function(c){return !yourCatSet2[c];}).slice(0,5);
+
+    data.push([isES ? 'Categoría principal recomendada:' : 'Recommended primary:', recPrimary]);
+    data.push([isES ? 'Secundarias sugeridas:' : 'Suggested secondary:', recSecondary.join(', ')]);
+    var titleLower2 = (biz.title || '').toLowerCase();
+    var recInTitle = recPrimary && titleLower2.includes(recPrimary.toLowerCase());
+    data.push([isES ? 'Keyword en título:' : 'Keyword in title:', recInTitle ? (isES ? 'Sí ✓' : 'Yes ✓') : (isES ? 'No ✗ — considerar agregar' : 'No ✗ — consider adding')]);
   }
 
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:30},{wch:20},{wch:50},{wch:2},{wch:8},{wch:10}];
+  ws['!cols'] = [{wch:12},{wch:30},{wch:22},{wch:50},{wch:2},{wch:8},{wch:10}];
   XLSX.utils.book_append_sheet(wb, ws, 'Advanced Audit');
 
   var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);

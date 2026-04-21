@@ -2624,7 +2624,7 @@ function renderCompetitorAnalysis(audit) {
   // Table of competitors
   html += '<div style="overflow-x:auto;">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
-  html += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">#</th><th style="padding:8px;text-align:left;">' + (isES ? 'Nombre' : 'Name') + '</th><th style="padding:8px;">' + (isES ? 'Cat. Principal' : 'Primary Cat.') + '</th><th style="padding:8px;">' + (isES ? 'Secundarias' : 'Secondary') + '</th><th style="padding:8px;">★</th><th style="padding:8px;">' + (isES ? 'Reseñas' : 'Reviews') + '</th><th style="padding:8px;">' + (isES ? 'Fotos' : 'Photos') + '</th></tr>';
+  html += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">#</th><th style="padding:8px;text-align:left;">' + (isES ? 'Nombre' : 'Name') + '</th><th style="padding:8px;">' + (isES ? 'Cat. Principal' : 'Primary Cat.') + '</th><th style="padding:8px;">' + (isES ? 'Secundarias' : 'Secondary') + '</th><th style="padding:8px;">★</th><th style="padding:8px;">' + (isES ? 'Reseñas' : 'Reviews') + '</th><th style="padding:8px;">' + (isES ? 'Fotos' : 'Photos') + '</th><th style="padding:8px;">Web</th></tr>';
 
   var allCatPool = {};
   var primaryPool = {};
@@ -2654,6 +2654,7 @@ function renderCompetitorAnalysis(audit) {
     html += '<td style="padding:6px 8px;text-align:center;">' + (c.totalScore || '') + '</td>';
     html += '<td style="padding:6px 8px;text-align:center;">' + (c.reviewsCount || '') + '</td>';
     html += '<td style="padding:6px 8px;text-align:center;">' + (c.imageCount || c.imagesCount || '') + '</td>';
+    html += '<td style="padding:6px 8px;text-align:center;">' + (c.website ? '✓' : '✗') + '</td>';
     html += '</tr>';
   }
   html += '</table></div>';
@@ -2768,7 +2769,7 @@ function dlAdvancedExcel() {
       c.step || '',
       c.label,
       c.ok ? '✓ ' + c.value : '✗ ' + c.value,
-      c.action || '',
+      c.ok ? '' : (c.action || ''),
     ]);
   }
 
@@ -2847,7 +2848,7 @@ function dlAdvancedExcel() {
     data.push(['═══════════════════════════════════════════════════════']);
     data.push([isES ? 'TOP COMPETIDORES EN EL ÁREA' : 'TOP COMPETITORS IN THE AREA']);
     data.push(['']);
-    data.push(['#', isES ? 'Nombre' : 'Name', isES ? 'Cat. Principal' : 'Primary Cat.', isES ? 'Categorías Secundarias' : 'Secondary Categories', '', '★', isES ? 'Reseñas' : 'Reviews']);
+    data.push(['#', isES ? 'Nombre' : 'Name', isES ? 'Cat. Principal' : 'Primary Cat.', isES ? 'Categorías Secundarias' : 'Secondary Categories', '★', isES ? 'Reseñas' : 'Reviews', isES ? 'Fotos' : 'Photos', isES ? 'Sitio web' : 'Website']);
 
     var allCatPoolExcel = {};
     var primaryPoolExcel = {};
@@ -2861,7 +2862,9 @@ function dlAdvancedExcel() {
       if (ccPrimary) { if (!primaryPoolExcel[ccPrimary]) primaryPoolExcel[ccPrimary] = 0; primaryPoolExcel[ccPrimary]++; }
       ccCats.forEach(function(cat) { if (!allCatPoolExcel[cat]) allCatPoolExcel[cat] = 0; allCatPoolExcel[cat]++; });
 
-      data.push([ci+1, cc.title || '', ccPrimary, ccSecondary, '', cc.totalScore || '', cc.reviewsCount || '']);
+      var ccWebsite = cc.website || '';
+      var ccPhotos = cc.imageCount || cc.imagesCount || 0;
+      data.push([ci+1, cc.title || '', ccPrimary, ccSecondary, cc.totalScore || '', cc.reviewsCount || '', ccPhotos, ccWebsite ? (isES ? 'Sí' : 'Yes') : 'No']);
     }
 
     // Category pool + recommendations
@@ -2889,7 +2892,7 @@ function dlAdvancedExcel() {
   }
 
   var ws = XLSX.utils.aoa_to_sheet(data);
-  ws['!cols'] = [{wch:12},{wch:30},{wch:22},{wch:50},{wch:2},{wch:8},{wch:10}];
+  ws['!cols'] = [{wch:6},{wch:30},{wch:22},{wch:50},{wch:6},{wch:10},{wch:8},{wch:10}];
   XLSX.utils.book_append_sheet(wb, ws, 'Advanced Audit');
 
   var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);

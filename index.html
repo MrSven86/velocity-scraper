@@ -1794,6 +1794,24 @@ async function runGMBAudit(token) {
   setProgress(100);
 }
 
+function quickProfileHealth(biz) {
+  var checks = [];
+  checks.push({id: 'phone', ok: !!(biz.phone && biz.phone.trim()), label: 'Phone'});
+  checks.push({id: 'address', ok: !!(biz.address && biz.address.trim()), label: 'Address'});
+  checks.push({id: 'hours', ok: !!(biz.openingHours && biz.openingHours.length > 0), label: 'Hours'});
+  checks.push({id: 'desc', ok: !!(biz.description && biz.description.length >= 200), label: 'Description'});
+  checks.push({id: 'photos', ok: (biz.imageCount || biz.imagesCount || 0) >= 10, label: 'Photos 10+'});
+  checks.push({id: 'logo', ok: !!(biz.logoUrl || biz.logo), label: 'Logo'});
+  checks.push({id: 'services', ok: !!(biz.additionalInfo || biz.services), label: 'Services'});
+  checks.push({id: 'categories', ok: (biz.categories || []).length >= 4, label: 'Categories 3+'});
+  checks.push({id: 'reviews20', ok: (biz.reviewsCount || 0) >= 20, label: 'Reviews 20+'});
+  checks.push({id: 'rating4', ok: (biz.totalScore || 0) >= 4.0, label: 'Rating 4+'});
+  checks.push({id: 'website', ok: !!(biz.website && biz.website.trim()), label: 'Website'});
+  var passed = checks.filter(function(c){return c.ok;}).length;
+  var missing = checks.filter(function(c){return !c.ok;}).map(function(c){return c.label;});
+  return {passed: passed, total: checks.length, missing: missing, checks: checks};
+}
+
 function renderBulkAudit(audits) {
   document.getElementById('setup-card').classList.add('hidden');
   document.getElementById('results-card').classList.remove('hidden');
@@ -1817,14 +1835,33 @@ function renderBulkAudit(audits) {
     var vis = audit.results.filter(function(r){return r.found;}).length;
     var inv = audit.results.filter(function(r){return !r.found;}).length;
     var visPct = Math.round(vis / audit.results.length * 100);
+    var health = quickProfileHealth(biz);
 
-    html += '<div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;border-left:4px solid ' + (visPct < 50 ? '#dc2626' : '#16a34a') + ';">';
-    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">';
+    html += '<div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;border-left:4px solid ' + (health.passed < health.total * 0.5 ? '#dc2626' : '#16a34a') + ';">';
+    
+    // Header row: name + scores
+    html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
     html += '<div><strong style="font-size:15px;">' + (biz.title || '') + '</strong>';
     html += '<div style="font-size:12px;color:#888;">' + (biz.categoryName || '') + ' · ' + (audit.barrio || '') + ' · ' + (biz.phone || 'no phone') + '</div></div>';
-    html += '<div style="font-size:20px;font-weight:700;color:' + (visPct < 50 ? '#dc2626' : '#16a34a') + ';">' + visPct + '%</div>';
+    html += '<div style="text-align:right;">';
+    html += '<div style="font-size:16px;font-weight:700;color:' + (health.passed < health.total * 0.5 ? '#dc2626' : '#16a34a') + ';">' + health.passed + '/' + health.total + '</div>';
+    html += '<div style="font-size:11px;color:#888;">profile score</div>';
+    html += '</div></div>';
+
+    // Quick health badges
+    html += '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px;">';
+    for (var h = 0; h < health.checks.length; h++) {
+      var ch = health.checks[h];
+      html += '<span style="font-size:10px;padding:2px 6px;border-radius:3px;background:' + (ch.ok ? '#dcfce7' : '#fef2f2') + ';color:' + (ch.ok ? '#166534' : '#dc2626') + ';">' + (ch.ok ? '✓' : '✗') + ' ' + ch.label + '</span>';
+    }
     html += '</div>';
 
+    // Key missing items
+    if (health.missing.length > 0) {
+      html += '<div style="font-size:12px;color:#dc2626;margin-bottom:6px;">Missing: ' + health.missing.join(', ') + '</div>';
+    }
+
+    // Visibility rows
     for (var r = 0; r < audit.results.length; r++) {
       var res = audit.results[r];
       var badge = res.found
@@ -2931,6 +2968,44 @@ function dlBulkAuditExcel() {
   };
 
   var wb = XLSX.utils.book_new();
+
+  // ═══ SHEET 1: MASTER LIST for Leonor ═══
+  var summary = [];
+  summary.push([isES ? 'LISTA DE LEADS' : 'LEAD LIST']);
+  summary.push(['']);
+  summary.push([
+    '#',
+    isES ? 'Nombre' : 'Name',
+    isES ? 'Teléfono' : 'Phone',
+    isES ? 'Barrio' : 'Neighborhood',
+    isES ? 'Perfil' : 'Profile Score',
+    'Web',
+    isES ? 'Reseñas' : 'Reviews',
+    '★',
+    isES ? 'Fotos' : 'Photos',
+    isES ? 'Falta' : 'Missing',
+  ]);
+  for (var s = 0; s < audits.length; s++) {
+    var sBiz = audits[s].biz;
+    var sHealth = quickProfileHealth(sBiz);
+    summary.push([
+      s + 1,
+      sBiz.title || '',
+      sBiz.phone || '',
+      audits[s].barrio || '',
+      sHealth.passed + '/' + sHealth.total,
+      sBiz.website ? (isES ? 'Sí' : 'Yes') : 'NO',
+      sBiz.reviewsCount || 0,
+      sBiz.totalScore || 0,
+      sBiz.imageCount || sBiz.imagesCount || 0,
+      sHealth.missing.join(', '),
+    ]);
+  }
+  var wsSummary = XLSX.utils.aoa_to_sheet(summary);
+  wsSummary['!cols'] = [{wch:4},{wch:35},{wch:18},{wch:16},{wch:8},{wch:6},{wch:8},{wch:5},{wch:7},{wch:50}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, isES ? 'Resumen' : 'Summary');
+
+  // ═══ SHEET 2: DETAILED REPORTS ═══
   var data = [];
 
   data.push([L.title + ' — ' + audits.length + ' businesses']);
@@ -2964,6 +3039,32 @@ function dlBulkAuditExcel() {
     data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
     data.push([L.profile, biz.url || '']);
     data.push(['']);
+
+    // Profile health scorecard
+    var health = quickProfileHealth(biz);
+    data.push([isES ? 'PERFIL' : 'PROFILE', health.passed + '/' + health.total, '', health.missing.length > 0 ? (isES ? 'Falta: ' : 'Missing: ') + health.missing.join(', ') : (isES ? 'Perfil completo ✓' : 'Complete profile ✓')]);
+
+    // Quick checklist row
+    var ck = health.checks;
+    data.push([
+      isES ? 'Tel' : 'Phone', ck[0].ok ? '✓' : '✗',
+      isES ? 'Dir' : 'Addr', ck[1].ok ? '✓' : '✗',
+      isES ? 'Hrs' : 'Hours', ck[2].ok ? '✓' : '✗',
+      isES ? 'Desc' : 'Desc', ck[3].ok ? '✓' : '✗',
+    ]);
+    data.push([
+      isES ? 'Fotos' : 'Photos', ck[4].ok ? '✓ ' + (biz.imageCount||biz.imagesCount||0) : '✗ ' + (biz.imageCount||biz.imagesCount||0),
+      'Logo', ck[5].ok ? '✓' : '✗',
+      isES ? 'Serv' : 'Serv', ck[6].ok ? '✓' : '✗',
+      isES ? 'Cats' : 'Cats', ck[7].ok ? '✓ ' + (biz.categories||[]).length : '✗ ' + (biz.categories||[]).length,
+    ]);
+    data.push([
+      isES ? 'Reseñas' : 'Reviews', (biz.reviewsCount||0),
+      '★', (biz.totalScore||0),
+      'Web', ck[10].ok ? '✓' : '✗ ' + (isES ? 'OPORTUNIDAD' : 'OPPORTUNITY'),
+    ]);
+    data.push(['']);
+
     data.push([L.visScore, visPct + '%', '', vis + '/' + results.length]);
     data.push(['']);
 
@@ -3030,7 +3131,7 @@ function dlBulkAuditExcel() {
     // This is approximate; hyperlinks are best-effort
   }
 
-  XLSX.utils.book_append_sheet(wb, ws, 'Report');
+  XLSX.utils.book_append_sheet(wb, ws, isES ? 'Detalle' : 'Details');
   var dateStr = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, 'bulk-audit-' + dateStr + '.xlsx');
 }

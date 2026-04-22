@@ -1613,18 +1613,16 @@ async function runGMBAudit(token) {
     biz._barrio = barrio;
 
     // Build keywords for this business
+    // NOTE: barrio is NOT added to search queries — coordinates handle location.
+    // Barrio is kept for display purposes only.
     var cat = mainKeyword || (biz.categoryName || '').toLowerCase();
     var keywords = [];
     if (cat) {
       keywords.push(cat);
       keywords.push(cat + ' cerca de mi');
-      if (barrio) keywords.push(cat + ' ' + barrio);
     }
     for (var e = 0; e < extraKeywords.length; e++) {
       keywords.push(extraKeywords[e]);
-      if (barrio && !extraKeywords[e].toLowerCase().includes(barrio.toLowerCase())) {
-        keywords.push(extraKeywords[e] + ' ' + barrio);
-      }
     }
     // Dedup within this business
     var seen = {};

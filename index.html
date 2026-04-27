@@ -270,6 +270,13 @@ urgencias 24hs</textarea>
             <option value="5">5 km</option>
           </select>
         </div>
+        <div style="flex:1;">
+          <label>Grid size</label>
+          <select id="rank-grid-size">
+            <option value="2">2×2 (4 points — fast)</option>
+            <option value="3" selected>3×3 (9 points — recommended)</option>
+          </select>
+        </div>
       </div>
     </div>
     <div id="status" class="status info hidden"></div>
@@ -1568,17 +1575,21 @@ async function runRankTracker(token) {
 
   if (!centerLat || !centerLng) throw new Error('Could not determine business location.');
 
-  // Step 2: Generate 2x2 grid
+  // Step 2: Generate grid
+  var gridDim = parseInt(document.getElementById('rank-grid-size').value) || 3;
   var kmPerDeg = 111.32;
-  var offsets = [-0.5, 0.5];
   var gridPoints = [];
-  for (var dy = 0; dy < offsets.length; dy++) {
-    for (var dx = 0; dx < offsets.length; dx++) {
+  var halfGrid = (gridDim - 1) / 2;
+
+  for (var gy = 0; gy < gridDim; gy++) {
+    for (var gx = 0; gx < gridDim; gx++) {
+      var dy = (gy - halfGrid) * spacingKm;
+      var dx = (gx - halfGrid) * spacingKm;
       gridPoints.push({
-        lat: centerLat + (offsets[dy] * spacingKm) / kmPerDeg,
-        lng: centerLng + (offsets[dx] * spacingKm) / (kmPerDeg * Math.cos(centerLat * Math.PI / 180)),
-        row: dy,
-        col: dx,
+        lat: centerLat + dy / kmPerDeg,
+        lng: centerLng + dx / (kmPerDeg * Math.cos(centerLat * Math.PI / 180)),
+        row: gy,
+        col: gx,
       });
     }
   }
@@ -1641,8 +1652,8 @@ async function runRankTracker(token) {
 
 function rankColor(rank) {
   if (rank <= 3) return '#16a34a';
-  if (rank <= 7) return '#65a30d';
-  if (rank <= 15) return '#f59e0b';
+  if (rank <= 7) return '#f59e0b';
+  if (rank <= 15) return '#ea580c';
   return '#ef4444';
 }
 
@@ -1665,67 +1676,18 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
 
   document.getElementById('result-tabs').innerHTML = '';
 
-  // Build SVG grid visualization (works everywhere, no external dependencies)
-  var gridSize = 160;
-  var gap = 12;
-  var totalW = 2 * gridSize + gap;
-  var totalH = 2 * gridSize + gap;
-
-  var svg = '<svg viewBox="0 0 ' + (totalW + 40) + ' ' + (totalH + 80) + '" style="max-width:400px;width:100%;margin:0 auto;display:block;" xmlns="http://www.w3.org/2000/svg">';
-
-  // Title
-  svg += '<text x="' + ((totalW+40)/2) + '" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#333">Rank Tracker — "' + keyword + '"</text>';
-  svg += '<text x="' + ((totalW+40)/2) + '" y="42" text-anchor="middle" font-size="11" fill="#888">' + business + '</text>';
-
-  var startY = 55;
-  var startX = 20;
-
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    var col = r.col;
-    var row = r.row;
-    var x = startX + col * (gridSize + gap);
-    var y = startY + row * (gridSize + gap);
-    var color = rankColor(r.rank);
-    var label = r.rank > 20 ? '—' : '#' + r.rank;
-
-    // Background rect
-    svg += '<rect x="' + x + '" y="' + y + '" width="' + gridSize + '" height="' + gridSize + '" rx="12" fill="' + color + '" opacity="0.15"/>';
-    svg += '<rect x="' + x + '" y="' + y + '" width="' + gridSize + '" height="' + gridSize + '" rx="12" fill="none" stroke="' + color + '" stroke-width="2"/>';
-
-    // Rank number
-    svg += '<text x="' + (x + gridSize/2) + '" y="' + (y + gridSize/2 + 8) + '" text-anchor="middle" font-size="32" font-weight="800" fill="' + color + '">' + label + '</text>';
-
-    // Top 3 results text
-    if (r.places && r.places.length > 0) {
-      for (var p = 0; p < Math.min(2, r.places.length); p++) {
-        var placeName = r.places[p].slice(0, 22) + (r.places[p].length > 22 ? '…' : '');
-        svg += '<text x="' + (x + gridSize/2) + '" y="' + (y + gridSize/2 + 28 + p*14) + '" text-anchor="middle" font-size="9" fill="#666">' + (p+1) + '. ' + placeName + '</text>';
-      }
-    }
-  }
-
-  // Center marker
-  var cx = startX + (totalW / 2);
-  var cy = startY + (totalH / 2);
-  svg += '<circle cx="' + cx + '" cy="' + cy + '" r="8" fill="#dc2626" stroke="#fff" stroke-width="2"/>';
-  svg += '<text x="' + cx + '" y="' + (cy - 14) + '" text-anchor="middle" font-size="9" font-weight="600" fill="#dc2626">📍 You</text>';
+  // Build the map container + detail list
+  var html = '<div style="font-weight:700;font-size:16px;text-align:center;margin-bottom:4px;">Rank Tracker — "' + keyword + '"</div>';
+  html += '<div style="text-align:center;font-size:13px;color:#888;margin-bottom:12px;">' + business + '</div>';
+  html += '<div id="rank-map-container" style="height:480px;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;margin-bottom:16px;"></div>';
 
   // Legend
-  var ly = startY + totalH + 20;
-  svg += '<circle cx="' + (startX + 10) + '" cy="' + ly + '" r="6" fill="#16a34a"/>';
-  svg += '<text x="' + (startX + 22) + '" y="' + (ly+4) + '" font-size="10" fill="#666">Top 3</text>';
-  svg += '<circle cx="' + (startX + 70) + '" cy="' + ly + '" r="6" fill="#65a30d"/>';
-  svg += '<text x="' + (startX + 82) + '" y="' + (ly+4) + '" font-size="10" fill="#666">4-7</text>';
-  svg += '<circle cx="' + (startX + 125) + '" cy="' + ly + '" r="6" fill="#f59e0b"/>';
-  svg += '<text x="' + (startX + 137) + '" y="' + (ly+4) + '" font-size="10" fill="#666">8-15</text>';
-  svg += '<circle cx="' + (startX + 185) + '" cy="' + ly + '" r="6" fill="#ef4444"/>';
-  svg += '<text x="' + (startX + 197) + '" y="' + (ly+4) + '" font-size="10" fill="#666">Not found</text>';
-
-  svg += '</svg>';
-
-  // Results list below
-  var html = '<div style="text-align:center;margin-bottom:16px;">' + svg + '</div>';
+  html += '<div style="display:flex;justify-content:center;gap:16px;margin-bottom:16px;font-size:12px;">';
+  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#16a34a;vertical-align:middle;margin-right:4px;"></span>Top 3</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#f59e0b;vertical-align:middle;margin-right:4px;"></span>4-7</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ea580c;vertical-align:middle;margin-right:4px;"></span>8-15</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444;vertical-align:middle;margin-right:4px;"></span>Not found</span>';
+  html += '</div>';
 
   // Detailed results
   html += '<div style="font-weight:600;margin-bottom:8px;">Grid Details</div>';
@@ -1737,7 +1699,7 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
 
     html += '<div style="padding:6px 10px;margin-bottom:4px;background:#f9fafb;border-radius:6px;border-left:4px solid ' + rankColor(res.rank) + ';">';
     html += '<div style="display:flex;justify-content:space-between;font-size:13px;">';
-    html += '<span>Point ' + (j+1) + ' (' + res.lat.toFixed(3) + ', ' + res.lng.toFixed(3) + ')</span> ' + badge;
+    html += '<span>Point ' + (j+1) + '</span> ' + badge;
     html += '</div>';
     if (res.places && res.places.length > 0) {
       html += '<div style="font-size:11px;color:#888;margin-top:2px;">';
@@ -1756,6 +1718,78 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
   });
 
   document.getElementById('dl-btns').innerHTML = '';
+
+  // Load Leaflet CSS + JS and init map
+  function loadLeaflet(callback) {
+    if (window.L) { callback(); return; }
+    var link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(link);
+    var script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+    script.onload = callback;
+    document.head.appendChild(script);
+  }
+
+  loadLeaflet(function() {
+    var container = document.getElementById('rank-map-container');
+    if (!container) return;
+
+    if (window._rankMap) { window._rankMap.remove(); window._rankMap = null; }
+    var map = L.map(container, {zoomControl: true, attributionControl: false}).setView([centerLat, centerLng], 12);
+    window._rankMap = map;
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
+      maxZoom: 19
+    }).addTo(map);
+
+    // Center business marker (red pin)
+    L.circleMarker([centerLat, centerLng], {
+      radius: 10, color: '#fff', fillColor: '#dc2626', fillOpacity: 1, weight: 3
+    }).addTo(map).bindPopup('<strong>' + business + '</strong><br>Business location');
+
+    // Grid rank markers — big numbered circles like Local Falcon
+    results.forEach(function(r) {
+      var color = rankColor(r.rank);
+      var label = r.rank > 20 ? '—' : String(r.rank);
+      var size = 38;
+
+      var icon = L.divIcon({
+        className: '',
+        html: '<div style="' +
+          'background:' + color + ';' +
+          'color:#fff;' +
+          'border-radius:50%;' +
+          'width:' + size + 'px;' +
+          'height:' + size + 'px;' +
+          'display:flex;' +
+          'align-items:center;' +
+          'justify-content:center;' +
+          'font-weight:800;' +
+          'font-size:' + (label.length > 1 ? '14' : '16') + 'px;' +
+          'border:3px solid #fff;' +
+          'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
+          'font-family:system-ui,sans-serif;' +
+          '">' + label + '</div>',
+        iconSize: [size, size],
+        iconAnchor: [size/2, size/2]
+      });
+
+      var topList = (r.places || []).slice(0,3).map(function(p,i){return (i+1) + '. ' + p;}).join('<br>');
+      L.marker([r.lat, r.lng], {icon: icon}).addTo(map)
+        .bindPopup('<strong>Rank: ' + (r.rank > 20 ? 'Not in top 20' : '#' + r.rank) + '</strong><br><small>' + topList + '</small>');
+    });
+
+    // Fit bounds to show all points
+    var allLats = results.map(function(r){return r.lat;}).concat([centerLat]);
+    var allLngs = results.map(function(r){return r.lng;}).concat([centerLng]);
+    var minLat = Math.min.apply(null, allLats);
+    var maxLat = Math.max.apply(null, allLats);
+    var minLng = Math.min.apply(null, allLngs);
+    var maxLng = Math.max.apply(null, allLngs);
+    map.fitBounds([[minLat - 0.005, minLng - 0.005], [maxLat + 0.005, maxLng + 0.005]]);
+  });
 }
 
 async function runGMBAudit(token) {

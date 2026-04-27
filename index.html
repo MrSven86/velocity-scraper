@@ -272,6 +272,7 @@ urgencias 24hs</textarea>
         </div>
       </div>
     </div>
+    <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
     <button class="btn" id="run-btn" onclick="startScrape()">Start scraping</button>
@@ -1539,76 +1540,101 @@ async function detectBarrio(biz) {
 }
 
 async function runRankTracker(token) {
-  const mapsUrl = document.getElementById('rank-maps-url').value.trim();
-  const keyword = document.getElementById('rank-keyword').value.trim();
-  const spacingKm = parseFloat(document.getElementById('rank-spacing').value);
+  var mapsUrl = document.getElementById('rank-maps-url').value.trim();
+  var keyword = document.getElementById('rank-keyword').value.trim();
+  var spacingKm = parseFloat(document.getElementById('rank-spacing').value);
 
   if (!mapsUrl || !keyword) throw new Error('Please fill in the Google Maps URL and keyword');
 
-  setStatus('Step 1/3 — Fetching business profile from Maps URL...', 'info');
+  setStatus('Step 1/3 — Fetching business profile...', 'info');
   setProgress(10);
 
-  // Step 1: Get placeId + coords from the Maps URL (same approach as GMB Audit)
-  const profileRunId = await startActor(token, 'compass~crawler-google-places', {
+  // Step 1: Get coords + name
+  var profileRunId = await startActor(token, 'compass~crawler-google-places', {
     startUrls: [{ url: mapsUrl }],
     maxCrawledPlacesPerSearch: 1,
     language: 'en',
     maxReviews: 0,
     maxImages: 0
   });
-  const profileData = await pollRun(token, profileRunId);
+  var profileData = await pollRun(token, profileRunId);
 
-  if (!profileData || !profileData.length) throw new Error('Could not fetch business from Maps URL. Check the URL.');
-  const biz = profileData[0];
-  const placeId = biz.placeId || '';
-  const bizName = biz.title || 'Business';
-  const centerLat = biz.location ? biz.location.lat : null;
-  const centerLng = biz.location ? biz.location.lng : null;
+  if (!profileData || !profileData.length) throw new Error('Could not fetch business. Check the URL.');
+  var biz = profileData[0];
+  var placeId = biz.placeId || '';
+  var bizName = biz.title || 'Business';
+  var centerLat = biz.location ? biz.location.lat : null;
+  var centerLng = biz.location ? biz.location.lng : null;
 
-  if (!centerLat || !centerLng) throw new Error('Could not determine business location from Maps URL.');
+  if (!centerLat || !centerLng) throw new Error('Could not determine business location.');
 
-  setStatus(`Step 2/3 — Running 4 rank searches for "${bizName}"...`, 'info');
-  setProgress(30);
-
-  // Generate 2x2 grid of coords around business location
-  const kmPerDeg = 111.32;
-  const offsets = [-0.5, 0.5];
-  const gridPoints = [];
-  for (const dy of offsets) {
-    for (const dx of offsets) {
+  // Step 2: Generate 2x2 grid
+  var kmPerDeg = 111.32;
+  var offsets = [-0.5, 0.5];
+  var gridPoints = [];
+  for (var dy = 0; dy < offsets.length; dy++) {
+    for (var dx = 0; dx < offsets.length; dx++) {
       gridPoints.push({
-        lat: centerLat + (dy * spacingKm) / kmPerDeg,
-        lng: centerLng + (dx * spacingKm) / (kmPerDeg * Math.cos(centerLat * Math.PI / 180))
+        lat: centerLat + (offsets[dy] * spacingKm) / kmPerDeg,
+        lng: centerLng + (offsets[dx] * spacingKm) / (kmPerDeg * Math.cos(centerLat * Math.PI / 180)),
+        row: dy,
+        col: dx,
       });
     }
   }
 
-  // Run all 4 searches in parallel, match by placeId
-  const results = await Promise.all(gridPoints.map(async (pt) => {
+  setStatus('Step 2/3 — Searching from ' + gridPoints.length + ' grid points (sequential)...', 'info');
+  setProgress(25);
+
+  // Step 3: Search from each point SEQUENTIALLY (not parallel — avoids rate limits)
+  var results = [];
+  for (var g = 0; g < gridPoints.length; g++) {
+    var pt = gridPoints[g];
+    setStatus('Step 2/3 — Grid point ' + (g+1) + '/' + gridPoints.length + '...', 'info');
+    setProgress(25 + Math.round((g / gridPoints.length) * 60));
+
     try {
-      const gridRunId = await startActor(token, 'compass~crawler-google-places', {
+      var gridRunId = await startActor(token, 'compass~crawler-google-places', {
         searchStringsArray: [keyword],
-        lat: pt.lat,
-        lng: pt.lng,
+        lat: String(pt.lat),
+        lng: String(pt.lng),
         zoom: 14,
         maxCrawledPlacesPerSearch: 20,
-        language: 'en'
+        language: 'en',
+        maxReviews: 0,
+        maxImages: 0,
       });
-      const places = await pollRun(token, gridRunId);
-      let rank = places.findIndex(p => p.placeId && p.placeId === placeId);
-      if (rank === -1 && bizName) rank = places.findIndex(p => p.title && p.title.toLowerCase() === bizName.toLowerCase());
-      return { ...pt, rank: rank === -1 ? 21 : rank + 1, found: rank !== -1, places: places.slice(0, 5).map(p => p.title) };
+      var places = await pollRun(token, gridRunId);
+
+      // Find our business in results
+      var rank = -1;
+      var bizNameLower = bizName.toLowerCase();
+      for (var p = 0; p < (places||[]).length; p++) {
+        var place = places[p];
+        // Match by placeId first, then by name
+        if (placeId && place.placeId && place.placeId === placeId) { rank = p; break; }
+        if (place.title && place.title.toLowerCase() === bizNameLower) { rank = p; break; }
+        // Fuzzy name match
+        if (place.title && (place.title.toLowerCase().includes(bizNameLower) || bizNameLower.includes(place.title.toLowerCase()))) { rank = p; break; }
+      }
+
+      results.push({
+        lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col,
+        rank: rank === -1 ? 21 : rank + 1,
+        found: rank !== -1,
+        places: (places||[]).slice(0, 5).map(function(p){return p.title||'';})
+      });
     } catch(e) {
-      return { ...pt, rank: 99, found: false, error: e.message };
+      results.push({lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col, rank: 99, found: false, error: e.message});
     }
-  }));
+  }
 
   setProgress(90);
   setStatus('Step 3/3 — Rendering map...', 'info');
   renderRankMap(results, bizName, keyword, centerLat, centerLng);
   setProgress(100);
 
-  const btn = document.getElementById('run-btn');
+  var btn = document.getElementById('run-btn');
   btn.disabled = false;
   btn.innerHTML = 'Run Rank Tracker';
 }
@@ -1621,84 +1647,115 @@ function rankColor(rank) {
 }
 
 function renderRankMap(results, business, keyword, centerLat, centerLng) {
-  const card = document.getElementById('results-card');
-  card.classList.remove('hidden');
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
 
-  document.getElementById('stats').innerHTML = `
-    <div style="font-weight:600;font-size:15px;margin-bottom:8px;">Rank Tracker — "${keyword}"</div>
-    <div style="font-size:13px;color:#666;">Business: <strong>${business}</strong> &nbsp;|&nbsp; Grid: 2×2 &nbsp;|&nbsp; ${results.filter(r=>r.found).length}/4 points ranked</div>
-  `;
-
-  document.getElementById('result-tabs').innerHTML = `<button class="tab active" onclick="switchTab('rankmap',this)">Rank Map</button>`;
-
-  document.getElementById('pane-reviews').innerHTML = `<div id="pane-rankmap" style="min-height:500px;"></div>`;
-  ['overview','photos','posts','captions','fbposts','webresearch'].forEach(p => {
-    const el = document.getElementById('pane-' + p);
-    if (el) el.classList.add('hidden');
-  });
-
-  // Load Leaflet and render
-  if (!window.L) {
-    const link = document.createElement('link');
-    link.rel = 'stylesheet';
-    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
-    document.head.appendChild(link);
-    const script = document.createElement('script');
-    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-    document.head.appendChild(script);
-    script.onload = () => initRankMap(results, business, centerLat, centerLng);
-  } else {
-    initRankMap(results, business, centerLat, centerLng);
+  var found = results.filter(function(r){return r.found;}).length;
+  var avgRank = 0;
+  var foundResults = results.filter(function(r){return r.found;});
+  if (foundResults.length > 0) {
+    var sum = 0;
+    foundResults.forEach(function(r){sum += r.rank;});
+    avgRank = (sum / foundResults.length).toFixed(1);
   }
-}
 
-function initRankMap(results, business, centerLat, centerLng) {
-  const container = document.getElementById('pane-rankmap');
-  container.style.height = '520px';
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + found + '/' + results.length + '</div><div class="stat-label">points ranked</div></div>' +
+    '<div class="stat"><div class="stat-num">' + (avgRank || '—') + '</div><div class="stat-label">avg rank</div></div>';
 
-  if (window._rankMap) { window._rankMap.remove(); }
-  const map = L.map(container).setView([centerLat, centerLng], 12);
-  window._rankMap = map;
+  document.getElementById('result-tabs').innerHTML = '';
 
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap contributors'
-  }).addTo(map);
+  // Build SVG grid visualization (works everywhere, no external dependencies)
+  var gridSize = 160;
+  var gap = 12;
+  var totalW = 2 * gridSize + gap;
+  var totalH = 2 * gridSize + gap;
 
-  // Center pin
-  L.circleMarker([centerLat, centerLng], {
-    radius: 8, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 1, weight: 2
-  }).addTo(map).bindPopup(`<strong>${business}</strong><br>Center point`);
+  var svg = '<svg viewBox="0 0 ' + (totalW + 40) + ' ' + (totalH + 80) + '" style="max-width:400px;width:100%;margin:0 auto;display:block;" xmlns="http://www.w3.org/2000/svg">';
 
-  // Grid rank markers
-  results.forEach(r => {
-    const color = rankColor(r.rank);
-    const label = r.rank > 20 ? '—' : r.rank;
-    const icon = L.divIcon({
-      className: '',
-      html: `<div style="background:${color};color:#fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);">${label}</div>`,
-      iconSize: [36, 36],
-      iconAnchor: [18, 18]
-    });
-    const topPlaces = r.places ? r.places.slice(0,3).map((p,i) => `${i+1}. ${p}`).join('<br>') : '';
-    L.marker([r.lat, r.lng], { icon }).addTo(map)
-      .bindPopup(`<strong>Rank: ${r.rank > 20 ? 'Not in top 20' : '#' + r.rank}</strong><br><small>Top results here:<br>${topPlaces}</small>`);
-  });
+  // Title
+  svg += '<text x="' + ((totalW+40)/2) + '" y="24" text-anchor="middle" font-size="14" font-weight="700" fill="#333">Rank Tracker — "' + keyword + '"</text>';
+  svg += '<text x="' + ((totalW+40)/2) + '" y="42" text-anchor="middle" font-size="11" fill="#888">' + business + '</text>';
+
+  var startY = 55;
+  var startX = 20;
+
+  for (var i = 0; i < results.length; i++) {
+    var r = results[i];
+    var col = r.col;
+    var row = r.row;
+    var x = startX + col * (gridSize + gap);
+    var y = startY + row * (gridSize + gap);
+    var color = rankColor(r.rank);
+    var label = r.rank > 20 ? '—' : '#' + r.rank;
+
+    // Background rect
+    svg += '<rect x="' + x + '" y="' + y + '" width="' + gridSize + '" height="' + gridSize + '" rx="12" fill="' + color + '" opacity="0.15"/>';
+    svg += '<rect x="' + x + '" y="' + y + '" width="' + gridSize + '" height="' + gridSize + '" rx="12" fill="none" stroke="' + color + '" stroke-width="2"/>';
+
+    // Rank number
+    svg += '<text x="' + (x + gridSize/2) + '" y="' + (y + gridSize/2 + 8) + '" text-anchor="middle" font-size="32" font-weight="800" fill="' + color + '">' + label + '</text>';
+
+    // Top 3 results text
+    if (r.places && r.places.length > 0) {
+      for (var p = 0; p < Math.min(2, r.places.length); p++) {
+        var placeName = r.places[p].slice(0, 22) + (r.places[p].length > 22 ? '…' : '');
+        svg += '<text x="' + (x + gridSize/2) + '" y="' + (y + gridSize/2 + 28 + p*14) + '" text-anchor="middle" font-size="9" fill="#666">' + (p+1) + '. ' + placeName + '</text>';
+      }
+    }
+  }
+
+  // Center marker
+  var cx = startX + (totalW / 2);
+  var cy = startY + (totalH / 2);
+  svg += '<circle cx="' + cx + '" cy="' + cy + '" r="8" fill="#dc2626" stroke="#fff" stroke-width="2"/>';
+  svg += '<text x="' + cx + '" y="' + (cy - 14) + '" text-anchor="middle" font-size="9" font-weight="600" fill="#dc2626">📍 You</text>';
 
   // Legend
-  const legend = L.control({ position: 'bottomright' });
-  legend.onAdd = () => {
-    const div = L.DomUtil.create('div');
-    div.style.cssText = 'background:#fff;padding:10px;border-radius:8px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,0.2);line-height:1.8;';
-    div.innerHTML = `
-      <div style="font-weight:600;margin-bottom:4px;">Ranking</div>
-      <div><span style="background:#16a34a;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">1</span> Top 3</div>
-      <div><span style="background:#65a30d;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">5</span> 4–7</div>
-      <div><span style="background:#f59e0b;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">10</span> 8–15</div>
-      <div><span style="background:#ef4444;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">—</span> Not found</div>
-    `;
-    return div;
-  };
-  legend.addTo(map);
+  var ly = startY + totalH + 20;
+  svg += '<circle cx="' + (startX + 10) + '" cy="' + ly + '" r="6" fill="#16a34a"/>';
+  svg += '<text x="' + (startX + 22) + '" y="' + (ly+4) + '" font-size="10" fill="#666">Top 3</text>';
+  svg += '<circle cx="' + (startX + 70) + '" cy="' + ly + '" r="6" fill="#65a30d"/>';
+  svg += '<text x="' + (startX + 82) + '" y="' + (ly+4) + '" font-size="10" fill="#666">4-7</text>';
+  svg += '<circle cx="' + (startX + 125) + '" cy="' + ly + '" r="6" fill="#f59e0b"/>';
+  svg += '<text x="' + (startX + 137) + '" y="' + (ly+4) + '" font-size="10" fill="#666">8-15</text>';
+  svg += '<circle cx="' + (startX + 185) + '" cy="' + ly + '" r="6" fill="#ef4444"/>';
+  svg += '<text x="' + (startX + 197) + '" y="' + (ly+4) + '" font-size="10" fill="#666">Not found</text>';
+
+  svg += '</svg>';
+
+  // Results list below
+  var html = '<div style="text-align:center;margin-bottom:16px;">' + svg + '</div>';
+
+  // Detailed results
+  html += '<div style="font-weight:600;margin-bottom:8px;">Grid Details</div>';
+  for (var j = 0; j < results.length; j++) {
+    var res = results[j];
+    var badge = res.found
+      ? '<span style="color:' + rankColor(res.rank) + ';font-weight:700;">#' + res.rank + '</span>'
+      : '<span style="color:#ef4444;font-weight:700;">Not found</span>';
+
+    html += '<div style="padding:6px 10px;margin-bottom:4px;background:#f9fafb;border-radius:6px;border-left:4px solid ' + rankColor(res.rank) + ';">';
+    html += '<div style="display:flex;justify-content:space-between;font-size:13px;">';
+    html += '<span>Point ' + (j+1) + ' (' + res.lat.toFixed(3) + ', ' + res.lng.toFixed(3) + ')</span> ' + badge;
+    html += '</div>';
+    if (res.places && res.places.length > 0) {
+      html += '<div style="font-size:11px;color:#888;margin-top:2px;">';
+      for (var k = 0; k < Math.min(3, res.places.length); k++) {
+        html += (k+1) + '. ' + res.places[k] + '  ';
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+  }
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
+
+  document.getElementById('dl-btns').innerHTML = '';
 }
 
 async function runGMBAudit(token) {

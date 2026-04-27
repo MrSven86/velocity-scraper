@@ -256,13 +256,11 @@ urgencias 24hs</textarea>
     </div>
 
     <div id="rank-fields" class="hidden">
-      <div class="tip" style="background:#f0fdf4;border-color:#22c55e;">Enter a business name and keyword. The tool searches from a 2x2 grid of coordinates around the address and shows where the business ranks at each point.</div>
-      <label>Business name (exact as on Google)</label>
-      <input type="text" id="rank-business" placeholder="Color Masters Painting" />
-      <label>Keyword to search</label>
+      <div class="tip" style="background:#f0fdf4;border-color:#22c55e;">Paste the Google Maps URL of the business. The tool checks where it ranks in local search results from a 2×2 grid of points around the business location.</div>
+      <label>Google Maps URL</label>
+      <input type="text" id="rank-maps-url" placeholder="https://www.google.com/maps/place/Color+Masters+Painting/..." />
+      <label>Keyword to track (what customers search)</label>
       <input type="text" id="rank-keyword" placeholder="painting contractor" />
-      <label>Address / city (center of grid)</label>
-      <input type="text" id="rank-address" placeholder="Phoenix, AZ" />
       <div style="display:flex;gap:12px;margin-top:8px;">
         <div style="flex:1;">
           <label>Grid spacing (km between points)</label>
@@ -1541,26 +1539,37 @@ async function detectBarrio(biz) {
 }
 
 async function runRankTracker(token) {
-  const business = document.getElementById('rank-business').value.trim();
+  const mapsUrl = document.getElementById('rank-maps-url').value.trim();
   const keyword = document.getElementById('rank-keyword').value.trim();
-  const address = document.getElementById('rank-address').value.trim();
   const spacingKm = parseFloat(document.getElementById('rank-spacing').value);
 
-  if (!business || !keyword || !address) {
-    throw new Error('Please fill in business name, keyword and address');
-  }
+  if (!mapsUrl || !keyword) throw new Error('Please fill in the Google Maps URL and keyword');
 
-  setStatus('Geocoding address...', 'info');
-  setProgress(5);
+  setStatus('Step 1/3 — Fetching business profile from Maps URL...', 'info');
+  setProgress(10);
 
-  // Geocode address using Nominatim (free)
-  const geoResp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`);
-  const geoData = await geoResp.json();
-  if (!geoData.length) throw new Error('Could not geocode address: ' + address);
-  const centerLat = parseFloat(geoData[0].lat);
-  const centerLng = parseFloat(geoData[0].lon);
+  // Step 1: Get placeId + coords from the Maps URL (same approach as GMB Audit)
+  const profileData = await startActor(token, 'compass~crawler-google-places', {
+    startUrls: [{ url: mapsUrl }],
+    maxCrawledPlacesPerSearch: 1,
+    language: 'en',
+    maxReviews: 0,
+    maxImages: 0
+  });
 
-  // Generate 2x2 grid of coords
+  if (!profileData || !profileData.length) throw new Error('Could not fetch business from Maps URL. Check the URL.');
+  const biz = profileData[0];
+  const placeId = biz.placeId || '';
+  const bizName = biz.title || 'Business';
+  const centerLat = biz.location ? biz.location.lat : null;
+  const centerLng = biz.location ? biz.location.lng : null;
+
+  if (!centerLat || !centerLng) throw new Error('Could not determine business location from Maps URL.');
+
+  setStatus(`Step 2/3 — Running 4 rank searches for "${bizName}"...`, 'info');
+  setProgress(30);
+
+  // Generate 2x2 grid of coords around business location
   const kmPerDeg = 111.32;
   const offsets = [-0.5, 0.5];
   const gridPoints = [];
@@ -1573,22 +1582,19 @@ async function runRankTracker(token) {
     }
   }
 
-  setStatus(`Running ${gridPoints.length} searches in parallel...`, 'info');
-  setProgress(20);
-
-  // Run all 4 Apify searches in parallel
-  const results = await Promise.all(gridPoints.map(async (pt, i) => {
-    const input = {
-      searchStringsArray: [keyword],
-      lat: pt.lat,
-      lng: pt.lng,
-      zoom: 14,
-      maxCrawledPlacesPerSearch: 20,
-      language: 'en'
-    };
+  // Run all 4 searches in parallel, match by placeId
+  const results = await Promise.all(gridPoints.map(async (pt) => {
     try {
-      const places = await startActor(token, 'compass~crawler-google-places', input);
-      const rank = places.findIndex(p => p.title && p.title.toLowerCase().includes(business.toLowerCase()));
+      const places = await startActor(token, 'compass~crawler-google-places', {
+        searchStringsArray: [keyword],
+        lat: pt.lat,
+        lng: pt.lng,
+        zoom: 14,
+        maxCrawledPlacesPerSearch: 20,
+        language: 'en'
+      });
+      let rank = places.findIndex(p => p.placeId && p.placeId === placeId);
+      if (rank === -1 && bizName) rank = places.findIndex(p => p.title && p.title.toLowerCase() === bizName.toLowerCase());
       return { ...pt, rank: rank === -1 ? 21 : rank + 1, found: rank !== -1, places: places.slice(0, 5).map(p => p.title) };
     } catch(e) {
       return { ...pt, rank: 99, found: false, error: e.message };
@@ -1596,8 +1602,8 @@ async function runRankTracker(token) {
   }));
 
   setProgress(90);
-  setStatus('Rendering map...', 'info');
-  renderRankMap(results, business, keyword, centerLat, centerLng);
+  setStatus('Step 3/3 — Rendering map...', 'info');
+  renderRankMap(results, bizName, keyword, centerLat, centerLng);
   setProgress(100);
 
   const btn = document.getElementById('run-btn');

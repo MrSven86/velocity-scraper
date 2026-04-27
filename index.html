@@ -1743,7 +1743,8 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
     window._rankMap = map;
 
     L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19
+      maxZoom: 19,
+      crossOrigin: true
     }).addTo(map);
 
     // Center business marker — Google Maps style red pin
@@ -2730,7 +2731,7 @@ function renderAdvRankMap(audit) {
     var map = L.map(container, {zoomControl:true,attributionControl:false}).setView([centerLat,centerLng],12);
     window._advRankMap = map;
 
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19,crossOrigin:true}).addTo(map);
 
     // Business pin
     var pinIcon = L.divIcon({className:'',html:'<div style="position:relative;width:30px;height:42px;"><svg viewBox="0 0 30 42" width="30" height="42"><path d="M15 0C6.7 0 0 6.7 0 15c0 10.5 15 27 15 27s15-16.5 15-27C30 6.7 23.3 0 15 0z" fill="#dc2626"/><circle cx="15" cy="14" r="6" fill="#fff"/></svg></div>',iconSize:[30,42],iconAnchor:[15,42]});
@@ -3350,6 +3351,7 @@ function dlAdvancedExcel() {
   XLSX.writeFile(wb, 'advanced-audit-' + name + '.xlsx');
 }
 
+
 async function generatePDF() {
   var audit = window._advAudit;
   var checks = window._advChecks;
@@ -3359,162 +3361,135 @@ async function generatePDF() {
   var results = audit.results;
   var comp = audit.topCompetitor;
   var allComps = audit.topCompetitors || [];
-  var rankResults = audit.rankResults || [];
   var rankKeyword = audit.rankKeyword || '';
   var barrio = audit.barrio || '';
   var cats = biz.categories || [];
   var vis = results.filter(function(r){return r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
   var today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
-
-  // Step 1: Capture map screenshot WHILE IT'S VISIBLE on screen
-  var mapImg = '';
-  var mapContainer = document.getElementById('adv-rank-map');
-  if (mapContainer) {
-    try {
-      // Make sure we're on the rank map tab
-      var mapTab = document.querySelector('.tab');
-      if (mapTab && mapTab.textContent.includes('Rank')) mapTab.click();
-      await new Promise(function(r){setTimeout(r, 500);}); // wait for render
-
-      mapContainer = document.getElementById('adv-rank-map');
-      if (mapContainer) {
-        var canvas = await html2canvas(mapContainer, {
-          useCORS: true,
-          allowTaint: true,
-          scale: 2,
-          logging: false,
-          backgroundColor: '#fff',
-        });
-        mapImg = canvas.toDataURL('image/png');
-      }
-    } catch(e) { console.log('Map capture failed:', e); }
-  }
-
-  // Step 2: Build report HTML
   var visColor = visPct >= 50 ? '#16a34a' : '#dc2626';
   var ratingColor = (biz.totalScore||0) >= 4 ? '#16a34a' : '#dc2626';
-  var visMsg = visPct === 0 ? 'Completely invisible' : (visPct < 50 ? 'Low visibility' : 'Showing in some searches');
-  var ratingMsg = (biz.reviewsCount||0) === 0 ? 'No reviews — customers can\'t trust' : ((biz.totalScore||0) < 4 ? 'Rating needs improvement' : 'Good rating');
+  var visMsg = visPct === 0 ? 'Completely invisible' : (visPct < 50 ? 'Low visibility' : 'Visible');
+  var ratingMsg = (biz.reviewsCount||0) === 0 ? 'No reviews' : ((biz.totalScore||0) < 4 ? 'Needs improvement' : 'Good');
 
-  var h = '<div style="font-family:system-ui,-apple-system,sans-serif;color:#111;line-height:1.5;padding:24px;">';
+  // Step 1: Ensure rank map tab is showing
+  var mapEl = document.getElementById('adv-rank-map');
+  if (mapEl) {
+    var tabs = document.querySelectorAll('.tab');
+    for (var ti = 0; ti < tabs.length; ti++) {
+      if (tabs[ti].textContent.indexOf('Rank') !== -1) { tabs[ti].click(); break; }
+    }
+    await new Promise(function(r){setTimeout(r, 800);});
+    mapEl = document.getElementById('adv-rank-map');
+  }
 
-  // Header
-  h += '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #e5e7eb;margin-bottom:24px;">';
+  // Step 2: Screenshot the map with useCORS:true, allowTaint:false
+  var mapImg = '';
+  var mapSavedHTML = '';
+  if (mapEl) {
+    try {
+      var canvas = await html2canvas(mapEl, {useCORS:true, allowTaint:false, scale:2, logging:false, backgroundColor:'#fff'});
+      mapImg = canvas.toDataURL('image/png');
+      // Step 3: Swap live map for static <img>
+      mapSavedHTML = mapEl.innerHTML;
+      mapEl.innerHTML = '<img src="'+mapImg+'" style="width:100%;height:100%;object-fit:cover;border-radius:12px;" />';
+    } catch(e) { console.log('Map capture error:', e); }
+  }
+
+  // Step 4: Build report HTML
+  var h = '<div style="font-family:system-ui,-apple-system,sans-serif;color:#111;line-height:1.5;padding:28px;background:#fff;width:760px;">';
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:10px;border-bottom:1px solid #ddd;margin-bottom:20px;">';
   h += '<span style="color:#1a56db;font-weight:800;letter-spacing:4px;font-size:11px;">VELOCITY WEB</span>';
-  h += '<span style="color:#888;font-size:12px;">Online Presence Analysis</span></div>';
-
-  // Title
-  h += '<h1 style="font-size:28px;font-weight:800;margin:0 0 4px;">' + (biz.title||'') + '</h1>';
-  h += '<p style="color:#888;font-size:13px;margin:0 0 20px;">' + barrio + ' &bull; ' + (biz.categoryName||'') + ' &bull; ' + today + '</p>';
-
-  // Score boxes
-  h += '<div style="display:flex;gap:12px;margin-bottom:20px;">';
-  h += '<div style="flex:1;border:2px solid '+visColor+';border-radius:8px;padding:16px;text-align:center;">';
-  h += '<div style="font-size:10px;letter-spacing:2px;color:#555;font-weight:700;">GOOGLE VISIBILITY</div>';
-  h += '<div style="font-size:42px;font-weight:800;color:'+visColor+';line-height:1.1;">'+visPct+'%</div>';
-  h += '<div style="font-size:11px;color:#888;">'+vis+'/'+results.length+' searches</div>';
-  h += '<div style="font-size:11px;color:'+visColor+';font-weight:600;">'+visMsg+'</div></div>';
-  h += '<div style="flex:1;border:2px solid '+ratingColor+';border-radius:8px;padding:16px;text-align:center;">';
-  h += '<div style="font-size:10px;letter-spacing:2px;color:#555;font-weight:700;">RATING</div>';
-  h += '<div style="font-size:42px;font-weight:800;color:'+ratingColor+';line-height:1.1;">'+(biz.totalScore||0)+' ★</div>';
-  h += '<div style="font-size:11px;color:#888;">'+(biz.reviewsCount||0)+' reviews &bull; '+(biz.imageCount||biz.imagesCount||0)+' photos</div>';
-  h += '<div style="font-size:11px;color:'+ratingColor+';font-weight:600;">'+ratingMsg+'</div></div></div>';
-
-  // Rank map image
+  h += '<span style="color:#888;font-size:11px;">Online Presence Analysis</span></div>';
+  h += '<h1 style="font-size:26px;font-weight:800;margin:0 0 2px;">'+(biz.title||'')+'</h1>';
+  h += '<p style="color:#888;font-size:12px;margin:0 0 16px;">'+barrio+' &bull; '+(biz.categoryName||'')+' &bull; '+today+'</p>';
+  h += '<div style="display:flex;gap:12px;margin-bottom:16px;">';
+  h += '<div style="flex:1;border:2px solid '+visColor+';border-radius:6px;padding:14px;text-align:center;">';
+  h += '<div style="font-size:9px;letter-spacing:2px;color:#555;font-weight:700;">GOOGLE VISIBILITY</div>';
+  h += '<div style="font-size:38px;font-weight:800;color:'+visColor+';line-height:1.1;">'+visPct+'%</div>';
+  h += '<div style="font-size:10px;color:#888;">'+vis+'/'+results.length+' searches</div>';
+  h += '<div style="font-size:10px;color:'+visColor+';font-weight:600;">'+visMsg+'</div></div>';
+  h += '<div style="flex:1;border:2px solid '+ratingColor+';border-radius:6px;padding:14px;text-align:center;">';
+  h += '<div style="font-size:9px;letter-spacing:2px;color:#555;font-weight:700;">RATING</div>';
+  h += '<div style="font-size:38px;font-weight:800;color:'+ratingColor+';line-height:1.1;">'+(biz.totalScore||0)+' ★</div>';
+  h += '<div style="font-size:10px;color:#888;">'+(biz.reviewsCount||0)+' reviews &bull; '+(biz.imageCount||biz.imagesCount||0)+' photos</div>';
+  h += '<div style="font-size:10px;color:'+ratingColor+';font-weight:600;">'+ratingMsg+'</div></div></div>';
   if (mapImg) {
-    h += '<div style="text-align:center;margin-bottom:16px;">';
-    h += '<div style="font-weight:600;font-size:13px;">Rank Tracker — "'+rankKeyword+'"</div>';
-    h += '<div style="font-size:11px;color:#888;margin-bottom:6px;">'+(biz.title||'')+'</div>';
-    h += '<img src="'+mapImg+'" style="width:100%;border-radius:8px;border:1px solid #e5e7eb;" />';
-    h += '<div style="font-size:10px;color:#888;margin-top:4px;">🟢 Top 3 &nbsp; 🟡 4-7 &nbsp; 🟠 8-15 &nbsp; 🔴 20+</div></div>';
+    h += '<div style="text-align:center;margin-bottom:14px;">';
+    h += '<div style="font-weight:600;font-size:12px;">Rank Tracker — "'+rankKeyword+'"</div>';
+    h += '<div style="font-size:10px;color:#888;margin-bottom:4px;">'+(biz.title||'')+'</div>';
+    h += '<img src="'+mapImg+'" style="width:100%;border-radius:6px;border:1px solid #ddd;" />';
+    h += '<div style="font-size:9px;color:#888;margin-top:3px;">🟢 Top 3 🟡 4-7 🟠 8-15 🔴 20+</div></div>';
   }
-
-  // Business details
-  h += '<h2 style="font-size:16px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Business Details</h2>';
-  h += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-  [['Business',biz.title||''],['Category',biz.categoryName||''],['Address',biz.address||''],['Phone',biz.phone||''],
-   ['Website',biz.website||'<span style="color:#dc2626;font-weight:600;">NO WEBSITE</span>'],
-   ['Secondary categories',cats.length>1?cats.slice(1).join(', '):'<span style="color:#dc2626;">None</span>']
-  ].forEach(function(d){h+='<tr><td style="padding:4px 0;color:#888;width:160px;">'+d[0]+'</td><td style="padding:4px 0;">'+d[1]+'</td></tr>';});
-  h += '</table>';
-
-  // Checklist
-  h += '<h2 style="font-size:16px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Profile Optimization Checklist</h2>';
+  h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Business Details</h2>';
   h += '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
-  h += '<tr style="background:#f3f4f6;"><th style="padding:6px;text-align:left;">STEP</th><th style="padding:6px;text-align:left;">ITEM</th><th style="padding:6px;text-align:left;">STATUS</th><th style="padding:6px;text-align:left;">ACTION NEEDED</th></tr>';
-  checks.forEach(function(c){
-    h+='<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:4px 6px;font-weight:700;">'+(c.step||'')+'</td><td style="padding:4px 6px;">'+c.label+'</td><td style="padding:4px 6px;color:'+(c.ok?'#16a34a':'#dc2626')+';font-weight:600;">'+(c.ok?'✓ ':'✗ ')+c.value+'</td><td style="padding:4px 6px;color:#666;">'+(c.ok?'—':(c.action||''))+'</td></tr>';
-  });
+  [['Business',biz.title||''],['Category',biz.categoryName||''],['Address',biz.address||''],['Phone',biz.phone||''],['Website',biz.website||'<span style="color:#dc2626;font-weight:600;">NO WEBSITE</span>'],['Secondary',cats.length>1?cats.slice(1).join(', '):'<span style="color:#dc2626;">None</span>']].forEach(function(d){h+='<tr><td style="padding:3px 0;color:#888;width:130px;">'+d[0]+'</td><td style="padding:3px 0;">'+d[1]+'</td></tr>';});
   h += '</table>';
-
-  // Visibility
-  h += '<h2 style="font-size:16px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Visibility Results</h2>';
-  h += '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
-  h += '<tr style="background:#f3f4f6;"><th style="padding:6px;text-align:left;">SEARCH</th><th style="padding:6px;">VISIBLE?</th><th style="padding:6px;">POS.</th><th style="padding:6px;text-align:left;">WHO SHOWS UP</th><th style="padding:6px;">RATING</th><th style="padding:6px;">REVIEWS</th></tr>';
-  results.forEach(function(r){
-    var c1=r.topCompetitors[0]||{};
-    h+='<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:4px 6px;font-weight:600;">'+r.keyword+'</td><td style="padding:4px 6px;text-align:center;color:'+(r.found?'#16a34a':'#dc2626')+';font-weight:700;">'+(r.found?'✓ YES':'✗ NO')+'</td><td style="padding:4px 6px;text-align:center;">'+(r.found?'#'+r.position:'—')+'</td><td style="padding:4px 6px;">'+(c1.name||'')+'</td><td style="padding:4px 6px;text-align:center;">'+(c1.rating?c1.rating+' ★':'')+'</td><td style="padding:4px 6px;text-align:center;">'+(c1.reviews||'')+'</td></tr>';
-    var c2=r.topCompetitors[1]||{};
-    if(!r.found&&c2.name) h+='<tr style="border-bottom:1px solid #f3f4f6;"><td></td><td></td><td></td><td style="padding:2px 6px;color:#888;">'+c2.name+'</td><td style="padding:2px 6px;text-align:center;color:#888;">'+(c2.rating?c2.rating+' ★':'')+'</td><td style="padding:2px 6px;text-align:center;color:#888;">'+(c2.reviews||'')+'</td></tr>';
-  });
+  h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Profile Optimization Checklist</h2>';
+  h += '<table style="width:100%;font-size:10px;border-collapse:collapse;"><tr style="background:#f3f4f6;"><th style="padding:5px;text-align:left;">STEP</th><th style="padding:5px;text-align:left;">ITEM</th><th style="padding:5px;text-align:left;">STATUS</th><th style="padding:5px;text-align:left;">ACTION NEEDED</th></tr>';
+  checks.forEach(function(c){h+='<tr style="border-bottom:1px solid #eee;"><td style="padding:3px 5px;font-weight:700;">'+(c.step||'')+'</td><td style="padding:3px 5px;">'+c.label+'</td><td style="padding:3px 5px;color:'+(c.ok?'#16a34a':'#dc2626')+';font-weight:600;">'+(c.ok?'✓ ':'✗ ')+c.value+'</td><td style="padding:3px 5px;color:#666;">'+(c.ok?'—':(c.action||''))+'</td></tr>';});
   h += '</table>';
-
-  // vs #1
+  h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Visibility Results</h2>';
+  h += '<table style="width:100%;font-size:10px;border-collapse:collapse;"><tr style="background:#f3f4f6;"><th style="padding:5px;text-align:left;">SEARCH</th><th style="padding:5px;">VISIBLE?</th><th style="padding:5px;">POS.</th><th style="padding:5px;text-align:left;">WHO SHOWS UP</th><th style="padding:5px;">RATING</th><th style="padding:5px;">REVIEWS</th></tr>';
+  results.forEach(function(r){var c1=r.topCompetitors[0]||{};h+='<tr style="border-bottom:1px solid #eee;"><td style="padding:3px 5px;font-weight:600;">'+r.keyword+'</td><td style="padding:3px 5px;text-align:center;color:'+(r.found?'#16a34a':'#dc2626')+';font-weight:700;">'+(r.found?'✓ YES':'✗ NO')+'</td><td style="padding:3px 5px;text-align:center;">'+(r.found?'#'+r.position:'—')+'</td><td style="padding:3px 5px;">'+(c1.name||'')+'</td><td style="padding:3px 5px;text-align:center;">'+(c1.rating?c1.rating+' ★':'')+'</td><td style="padding:3px 5px;text-align:center;">'+(c1.reviews||'')+'</td></tr>';});
+  h += '</table>';
   if (comp) {
-    h += '<h2 style="font-size:16px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Comparison with #1</h2>';
-    h += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
-    h += '<tr style="background:#f3f4f6;"><th style="padding:6px;text-align:left;">METRIC</th><th style="padding:6px;">YOU</th><th style="padding:6px;">#1 — '+(comp.title||'').slice(0,25)+'</th></tr>';
-    [['Rating',(biz.totalScore||0)+' ★',(comp.totalScore||0)+' ★'],['Reviews',biz.reviewsCount||0,comp.reviewsCount||0],['Photos',biz.imageCount||biz.imagesCount||0,comp.imageCount||comp.imagesCount||0],['Categories',cats.length,(comp.categories||[]).length],['Website',biz.website?'Yes':'No',comp.website?'Yes':'No']].forEach(function(row,i){
-      h+='<tr style="border-bottom:1px solid #f3f4f6;background:'+(i%2===0?'#fff':'#f9fafb')+';"><td style="padding:4px 6px;font-weight:600;">'+row[0]+'</td><td style="padding:4px 6px;text-align:center;">'+row[1]+'</td><td style="padding:4px 6px;text-align:center;font-weight:600;">'+row[2]+'</td></tr>';
-    });
+    h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Comparison with #1</h2>';
+    h += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><tr style="background:#f3f4f6;"><th style="padding:5px;text-align:left;">METRIC</th><th style="padding:5px;">YOU</th><th style="padding:5px;">#1 — '+(comp.title||'').slice(0,25)+'</th></tr>';
+    [['Rating',(biz.totalScore||0)+' ★',(comp.totalScore||0)+' ★'],['Reviews',biz.reviewsCount||0,comp.reviewsCount||0],['Photos',biz.imageCount||biz.imagesCount||0,comp.imageCount||comp.imagesCount||0],['Categories',cats.length,(comp.categories||[]).length],['Website',biz.website?'Yes':'No',comp.website?'Yes':'No']].forEach(function(row,i){h+='<tr style="border-bottom:1px solid #eee;background:'+(i%2===0?'#fff':'#f9fafb')+';"><td style="padding:3px 5px;font-weight:600;">'+row[0]+'</td><td style="padding:3px 5px;text-align:center;">'+row[1]+'</td><td style="padding:3px 5px;text-align:center;font-weight:600;">'+row[2]+'</td></tr>';});
     h += '</table>';
   }
-
-  // Competitor table
   if (allComps.length > 0) {
-    h += '<h2 style="font-size:16px;font-weight:700;margin:20px 0 8px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Top Competitors</h2>';
-    h += '<table style="width:100%;font-size:10px;border-collapse:collapse;">';
-    h += '<tr style="background:#f3f4f6;"><th style="padding:4px;">#</th><th style="padding:4px;text-align:left;">NAME</th><th style="padding:4px;">PRIMARY</th><th style="padding:4px;">SECONDARY</th><th style="padding:4px;">★</th><th style="padding:4px;">REVIEWS</th><th style="padding:4px;">WEB</th></tr>';
-    allComps.forEach(function(cc,i){
-      var ccC=cc.categories||[];
-      h+='<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:3px 4px;font-weight:700;">'+(i+1)+'</td><td style="padding:3px 4px;">'+(cc.title||'')+'</td><td style="padding:3px 4px;">'+(cc.categoryName||ccC[0]||'')+'</td><td style="padding:3px 4px;font-size:9px;">'+(ccC.slice(1).join(', ')||'—')+'</td><td style="padding:3px 4px;text-align:center;">'+(cc.totalScore||'')+'</td><td style="padding:3px 4px;text-align:center;">'+(cc.reviewsCount||'')+'</td><td style="padding:3px 4px;text-align:center;">'+(cc.website?'Yes':'No')+'</td></tr>';
-    });
+    var compCatCount={};allComps.forEach(function(cc){(cc.categories||[]).forEach(function(cat){if(!compCatCount[cat])compCatCount[cat]=0;compCatCount[cat]++;});});
+    var yourCatSet={};cats.forEach(function(c){yourCatSet[c]=true;});
+    var missingCats=Object.keys(compCatCount).filter(function(c){return !yourCatSet[c];}).sort(function(a,b){return compCatCount[b]-compCatCount[a];});
+    if (missingCats.length>0) {
+      h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Categories You\'re Missing</h2>';
+      h += '<table style="width:100%;font-size:11px;border-collapse:collapse;"><tr style="background:#f3f4f6;"><th style="padding:5px;text-align:left;">CATEGORY</th><th style="padding:5px;">USED BY</th></tr>';
+      missingCats.slice(0,8).forEach(function(cat){h+='<tr style="border-bottom:1px solid #eee;"><td style="padding:3px 5px;">→ '+cat+'</td><td style="padding:3px 5px;text-align:center;">'+compCatCount[cat]+' competitor(s)</td></tr>';});
+      h += '</table>';
+    }
+    h += '<h2 style="font-size:15px;font-weight:700;margin:18px 0 6px;padding-bottom:3px;border-bottom:2px solid #1a56db;">Top Competitors</h2>';
+    h += '<table style="width:100%;font-size:9px;border-collapse:collapse;"><tr style="background:#f3f4f6;"><th style="padding:4px;">#</th><th style="padding:4px;text-align:left;">NAME</th><th style="padding:4px;">PRIMARY</th><th style="padding:4px;">SECONDARY</th><th style="padding:4px;">★</th><th style="padding:4px;">REVIEWS</th><th style="padding:4px;">WEB</th></tr>';
+    allComps.forEach(function(cc,i){var ccC=cc.categories||[];h+='<tr style="border-bottom:1px solid #eee;"><td style="padding:2px 4px;font-weight:700;">'+(i+1)+'</td><td style="padding:2px 4px;">'+(cc.title||'')+'</td><td style="padding:2px 4px;">'+(cc.categoryName||ccC[0]||'')+'</td><td style="padding:2px 4px;font-size:8px;">'+(ccC.slice(1).join(', ')||'—')+'</td><td style="padding:2px 4px;text-align:center;">'+(cc.totalScore||'')+'</td><td style="padding:2px 4px;text-align:center;">'+(cc.reviewsCount||'')+'</td><td style="padding:2px 4px;text-align:center;">'+(cc.website?'Yes':'No')+'</td></tr>';});
     h += '</table>';
+    var primaryPool={};allComps.forEach(function(cc){var p=cc.categoryName||'';if(p){if(!primaryPool[p])primaryPool[p]=0;primaryPool[p]++;}});
+    var recPrimary=Object.keys(primaryPool).sort(function(a,b){return primaryPool[b]-primaryPool[a];})[0]||biz.categoryName||'';
+    h += '<div style="margin:14px 0;padding:10px;background:#fff8e1;border-radius:6px;border-left:4px solid #f59e0b;font-size:11px;"><strong>Recommendation:</strong> Primary: <strong>'+recPrimary+'</strong>';
+    if(missingCats.length>0) h += ' | Secondary: '+missingCats.slice(0,3).join(', ');
+    h += '</div>';
   }
-
-  // Footer
-  h += '<div style="margin-top:24px;padding:16px;background:#f9fafb;border-radius:8px;font-size:12px;color:#555;line-height:1.7;">';
-  h += 'The checklist above covers the basics. To truly show up when customers search for your services, you need a professional website connected to WhatsApp, an automated review system that filters negative reviews before they reach Google, and ongoing monthly profile optimization. That\'s what we do at Velocity Web.</div>';
-  h += '<div style="margin-top:12px;display:flex;justify-content:space-between;font-size:10px;color:#888;border-top:1px solid #e5e7eb;padding-top:8px;">';
-  h += '<span style="color:#1a56db;font-weight:800;letter-spacing:3px;">VELOCITY WEB</span>';
-  h += '<span>velocityweb.org &bull; '+today+'</span></div>';
+  h += '<div style="margin-top:18px;padding:12px;background:#f9fafb;border-radius:6px;font-size:10px;color:#555;line-height:1.6;">The checklist above covers the basics. To truly show up when customers search for your services, you need a professional website connected to WhatsApp, an automated review system, and ongoing monthly optimization. That\'s what we do at Velocity Web.</div>';
+  h += '<div style="margin-top:8px;display:flex;justify-content:space-between;font-size:9px;color:#888;border-top:1px solid #ddd;padding-top:6px;"><span style="color:#1a56db;font-weight:800;letter-spacing:3px;">VELOCITY WEB</span><span>velocityweb.org &bull; '+today+'</span></div>';
   h += '</div>';
 
-  // Step 3: Create visible wrapper for html2pdf
+  // Step 5: Create wrapper and run html2pdf
   var wrapper = document.createElement('div');
   wrapper.innerHTML = h;
-  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:794px;background:#fff;z-index:99999;overflow:auto;';
+  wrapper.style.cssText = 'position:fixed;top:0;left:0;width:794px;background:#fff;z-index:99999;';
   document.body.appendChild(wrapper);
-
-  // Small delay for images to load
-  await new Promise(function(r){setTimeout(r, 300);});
+  await new Promise(function(r){setTimeout(r,500);});
 
   try {
     var bizSlug = (biz.title||'report').toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,40);
     await html2pdf().set({
-      margin: [8,8,8,8],
-      filename: 'audit-' + bizSlug + '.pdf',
-      image: {type:'jpeg', quality:0.95},
-      html2canvas: {scale:2, useCORS:true, allowTaint:true, logging:false, backgroundColor:'#ffffff'},
-      jsPDF: {unit:'mm', format:'a4', orientation:'portrait'},
-      pagebreak: {mode:['avoid-all','css','legacy']},
+      margin:[8,8,8,8],
+      filename:'audit-'+bizSlug+'.pdf',
+      image:{type:'jpeg',quality:0.95},
+      html2canvas:{scale:2,useCORS:true,allowTaint:false,logging:false,backgroundColor:'#ffffff'},
+      jsPDF:{unit:'mm',format:'a4',orientation:'portrait'},
+      pagebreak:{mode:['avoid-all','css','legacy']},
     }).from(wrapper).save();
   } catch(e) {
-    alert('PDF generation failed: ' + e.message);
+    alert('PDF generation failed: '+e.message);
   }
 
+  // Step 6: Cleanup — remove wrapper, restore map
   document.body.removeChild(wrapper);
+  if (mapEl && mapSavedHTML) {
+    mapEl.innerHTML = mapSavedHTML;
+    renderAdvRankMap(audit);
+  }
 }
 
 function dlBulkAuditExcel() {

@@ -1633,7 +1633,7 @@ async function runRankTracker(token) {
         lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col,
         rank: rank === -1 ? 21 : rank + 1,
         found: rank !== -1,
-        places: (places||[]).slice(0, 5).map(function(p){return p.title||'';})
+        places: (places||[]).slice(0, 20).map(function(p){return p.title||'';})
       });
     } catch(e) {
       results.push({lat: pt.lat, lng: pt.lng, row: pt.row, col: pt.col, rank: 99, found: false, error: e.message});
@@ -1686,7 +1686,7 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
   html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#16a34a;vertical-align:middle;margin-right:4px;"></span>Top 3</span>';
   html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#f59e0b;vertical-align:middle;margin-right:4px;"></span>4-7</span>';
   html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ea580c;vertical-align:middle;margin-right:4px;"></span>8-15</span>';
-  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444;vertical-align:middle;margin-right:4px;"></span>Not found</span>';
+  html += '<span><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:#ef4444;vertical-align:middle;margin-right:4px;"></span>20+</span>';
   html += '</div>';
 
   // Detailed results
@@ -1695,7 +1695,7 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
     var res = results[j];
     var badge = res.found
       ? '<span style="color:' + rankColor(res.rank) + ';font-weight:700;">#' + res.rank + '</span>'
-      : '<span style="color:#ef4444;font-weight:700;">Not found</span>';
+      : '<span style="color:#ef4444;font-weight:700;">20+</span>';
 
     html += '<div style="padding:6px 10px;margin-bottom:4px;background:#f9fafb;border-radius:6px;border-left:4px solid ' + rankColor(res.rank) + ';">';
     html += '<div style="display:flex;justify-content:space-between;font-size:13px;">';
@@ -1744,16 +1744,26 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
       maxZoom: 19
     }).addTo(map);
 
-    // Center business marker (red pin)
-    L.circleMarker([centerLat, centerLng], {
-      radius: 10, color: '#fff', fillColor: '#dc2626', fillOpacity: 1, weight: 3
-    }).addTo(map).bindPopup('<strong>' + business + '</strong><br>Business location');
+    // Center business marker — Google Maps style red pin
+    var pinIcon = L.divIcon({
+      className: '',
+      html: '<div style="position:relative;width:30px;height:42px;">' +
+        '<svg viewBox="0 0 30 42" width="30" height="42" xmlns="http://www.w3.org/2000/svg">' +
+        '<path d="M15 0C6.7 0 0 6.7 0 15c0 10.5 15 27 15 27s15-16.5 15-27C30 6.7 23.3 0 15 0z" fill="#dc2626"/>' +
+        '<circle cx="15" cy="14" r="6" fill="#fff"/>' +
+        '</svg></div>',
+      iconSize: [30, 42],
+      iconAnchor: [15, 42],
+      popupAnchor: [0, -42]
+    });
+    L.marker([centerLat, centerLng], {icon: pinIcon}).addTo(map)
+      .bindPopup('<strong>' + business + '</strong><br><span style="font-size:12px;color:#888;">Business location</span>');
 
-    // Grid rank markers — big numbered circles like Local Falcon
+    // Grid rank markers — numbered circles
     results.forEach(function(r) {
       var color = rankColor(r.rank);
-      var label = r.rank > 20 ? '—' : String(r.rank);
-      var size = 38;
+      var label = r.rank > 20 ? '20+' : String(r.rank);
+      var size = 40;
 
       var icon = L.divIcon({
         className: '',
@@ -1767,18 +1777,41 @@ function renderRankMap(results, business, keyword, centerLat, centerLng) {
           'align-items:center;' +
           'justify-content:center;' +
           'font-weight:800;' +
-          'font-size:' + (label.length > 1 ? '14' : '16') + 'px;' +
+          'font-size:' + (label.length > 2 ? '12' : label.length > 1 ? '14' : '17') + 'px;' +
           'border:3px solid #fff;' +
           'box-shadow:0 2px 8px rgba(0,0,0,0.35);' +
           'font-family:system-ui,sans-serif;' +
+          'cursor:pointer;' +
           '">' + label + '</div>',
         iconSize: [size, size],
         iconAnchor: [size/2, size/2]
       });
 
-      var topList = (r.places || []).slice(0,3).map(function(p,i){return (i+1) + '. ' + p;}).join('<br>');
+      // Build detailed popup with all results
+      var popupHtml = '<div style="max-height:400px;overflow-y:auto;min-width:240px;">';
+      popupHtml += '<div style="font-weight:700;font-size:14px;margin-bottom:4px;">Results for "' + keyword + '"</div>';
+      popupHtml += '<div style="font-size:11px;color:#888;margin-bottom:8px;">📍 ' + r.lat.toFixed(6) + ', ' + r.lng.toFixed(6) + '</div>';
+
+      if (r.places && r.places.length > 0) {
+        for (var pi = 0; pi < r.places.length; pi++) {
+          var isUs = false;
+          var pName = r.places[pi];
+          if (pName.toLowerCase() === business.toLowerCase()) isUs = true;
+          var numColor = (pi < 3) ? '#16a34a' : (pi < 7) ? '#f59e0b' : '#ea580c';
+          if (isUs) numColor = '#3b82f6';
+
+          popupHtml += '<div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid #f3f4f6;' + (isUs ? 'background:#eff6ff;margin:0 -8px;padding-left:8px;padding-right:8px;border-radius:4px;' : '') + '">';
+          popupHtml += '<div style="min-width:28px;height:28px;border-radius:50%;background:' + numColor + ';color:#fff;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;">' + (pi+1) + '</div>';
+          popupHtml += '<div style="font-size:12px;' + (isUs ? 'font-weight:700;color:#1d4ed8;' : '') + '">' + pName + '</div>';
+          popupHtml += '</div>';
+        }
+      } else {
+        popupHtml += '<div style="color:#999;font-size:12px;">No results found at this point</div>';
+      }
+      popupHtml += '</div>';
+
       L.marker([r.lat, r.lng], {icon: icon}).addTo(map)
-        .bindPopup('<strong>Rank: ' + (r.rank > 20 ? 'Not in top 20' : '#' + r.rank) + '</strong><br><small>' + topList + '</small>');
+        .bindPopup(popupHtml, {maxWidth: 300, maxHeight: 450});
     });
 
     // Fit bounds to show all points

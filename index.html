@@ -1549,13 +1549,14 @@ async function runRankTracker(token) {
   setProgress(10);
 
   // Step 1: Get placeId + coords from the Maps URL (same approach as GMB Audit)
-  const profileData = await startActor(token, 'compass~crawler-google-places', {
+  const profileRunId = await startActor(token, 'compass~crawler-google-places', {
     startUrls: [{ url: mapsUrl }],
     maxCrawledPlacesPerSearch: 1,
     language: 'en',
     maxReviews: 0,
     maxImages: 0
   });
+  const profileData = await pollRun(token, profileRunId);
 
   if (!profileData || !profileData.length) throw new Error('Could not fetch business from Maps URL. Check the URL.');
   const biz = profileData[0];
@@ -1585,7 +1586,7 @@ async function runRankTracker(token) {
   // Run all 4 searches in parallel, match by placeId
   const results = await Promise.all(gridPoints.map(async (pt) => {
     try {
-      const places = await startActor(token, 'compass~crawler-google-places', {
+      const gridRunId = await startActor(token, 'compass~crawler-google-places', {
         searchStringsArray: [keyword],
         lat: pt.lat,
         lng: pt.lng,
@@ -1593,6 +1594,7 @@ async function runRankTracker(token) {
         maxCrawledPlacesPerSearch: 20,
         language: 'en'
       });
+      const places = await pollRun(token, gridRunId);
       let rank = places.findIndex(p => p.placeId && p.placeId === placeId);
       if (rank === -1 && bizName) rank = places.findIndex(p => p.title && p.title.toLowerCase() === bizName.toLowerCase());
       return { ...pt, rank: rank === -1 ? 21 : rank + 1, found: rank !== -1, places: places.slice(0, 5).map(p => p.title) };

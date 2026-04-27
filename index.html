@@ -89,6 +89,9 @@
       <button class="mode-btn" id="mode-audit" onclick="setMode('audit')" style="background:#fef2f2;border-color:#ef4444;">
         <span class="icon">📍</span>GMB Audit
       </button>
+      <button class="mode-btn" id="mode-rank" onclick="setMode('rank')" style="background:#f0fdf4;border-color:#22c55e;">
+        <span class="icon">🗺️</span>Rank Tracker
+      </button>
     </div>
 
     <label>Apify API token</label>
@@ -252,7 +255,25 @@ urgencias 24hs</textarea>
       </div>
     </div>
 
-    <div id="status" class="status info hidden"></div>
+    <div id="rank-fields" class="hidden">
+      <div class="tip" style="background:#f0fdf4;border-color:#22c55e;">Enter a business name and keyword. The tool searches from a 2x2 grid of coordinates around the address and shows where the business ranks at each point.</div>
+      <label>Business name (exact as on Google)</label>
+      <input type="text" id="rank-business" placeholder="Color Masters Painting" />
+      <label>Keyword to search</label>
+      <input type="text" id="rank-keyword" placeholder="painting contractor" />
+      <label>Address / city (center of grid)</label>
+      <input type="text" id="rank-address" placeholder="Phoenix, AZ" />
+      <div style="display:flex;gap:12px;margin-top:8px;">
+        <div style="flex:1;">
+          <label>Grid spacing (km between points)</label>
+          <select id="rank-spacing">
+            <option value="1">1 km</option>
+            <option value="2" selected>2 km</option>
+            <option value="5">5 km</option>
+          </select>
+        </div>
+      </div>
+    </div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
     <button class="btn" id="run-btn" onclick="startScrape()">Start scraping</button>
@@ -279,14 +300,15 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','gmaps','ig','research','fb','special','audit'].forEach(m => {
+  ['all','gmaps','ig','research','fb','special','audit','rank'].forEach(m => {
     var fields = document.getElementById(m + '-fields');
     if (fields) fields.classList.toggle('hidden', m !== mode);
     var btn = document.getElementById('mode-' + m);
     if (btn) btn.classList.toggle('active', m === mode);
   });
-  // Change button text for audit mode
-  document.getElementById('run-btn').innerHTML = mode === 'audit' ? 'Run GMB Audit' : 'Start scraping';
+  // Change button text per mode
+  const btnText = mode === 'audit' ? 'Run GMB Audit' : mode === 'rank' ? 'Run Rank Tracker' : 'Start scraping';
+  document.getElementById('run-btn').innerHTML = btnText;
 }
 
 function setStatus(msg, type) {
@@ -472,6 +494,8 @@ async function startScrape() {
       await scrapeSpecial(token);
     } else if (currentMode === 'audit') {
       await runGMBAudit(token);
+    } else if (currentMode === 'rank') {
+      await runRankTracker(token);
     } else {
       await scrapeResearch(token);
     }
@@ -1514,6 +1538,159 @@ async function detectBarrio(biz) {
     }
   }
   return barrio;
+}
+
+async function runRankTracker(token) {
+  const business = document.getElementById('rank-business').value.trim();
+  const keyword = document.getElementById('rank-keyword').value.trim();
+  const address = document.getElementById('rank-address').value.trim();
+  const spacingKm = parseFloat(document.getElementById('rank-spacing').value);
+
+  if (!business || !keyword || !address) {
+    throw new Error('Please fill in business name, keyword and address');
+  }
+
+  setStatus('Geocoding address...', 'info');
+  setProgress(5);
+
+  // Geocode address using Nominatim (free)
+  const geoResp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(address)}&format=json&limit=1`);
+  const geoData = await geoResp.json();
+  if (!geoData.length) throw new Error('Could not geocode address: ' + address);
+  const centerLat = parseFloat(geoData[0].lat);
+  const centerLng = parseFloat(geoData[0].lon);
+
+  // Generate 2x2 grid of coords
+  const kmPerDeg = 111.32;
+  const offsets = [-0.5, 0.5];
+  const gridPoints = [];
+  for (const dy of offsets) {
+    for (const dx of offsets) {
+      gridPoints.push({
+        lat: centerLat + (dy * spacingKm) / kmPerDeg,
+        lng: centerLng + (dx * spacingKm) / (kmPerDeg * Math.cos(centerLat * Math.PI / 180))
+      });
+    }
+  }
+
+  setStatus(`Running ${gridPoints.length} searches in parallel...`, 'info');
+  setProgress(20);
+
+  // Run all 4 Apify searches in parallel
+  const results = await Promise.all(gridPoints.map(async (pt, i) => {
+    const input = {
+      searchStringsArray: [keyword],
+      lat: pt.lat,
+      lng: pt.lng,
+      zoom: 14,
+      maxCrawledPlacesPerSearch: 20,
+      language: 'en'
+    };
+    try {
+      const places = await startActor(token, 'compass~crawler-google-places', input);
+      const rank = places.findIndex(p => p.title && p.title.toLowerCase().includes(business.toLowerCase()));
+      return { ...pt, rank: rank === -1 ? 21 : rank + 1, found: rank !== -1, places: places.slice(0, 5).map(p => p.title) };
+    } catch(e) {
+      return { ...pt, rank: 99, found: false, error: e.message };
+    }
+  }));
+
+  setProgress(90);
+  setStatus('Rendering map...', 'info');
+  renderRankMap(results, business, keyword, centerLat, centerLng);
+  setProgress(100);
+
+  const btn = document.getElementById('run-btn');
+  btn.disabled = false;
+  btn.innerHTML = 'Run Rank Tracker';
+}
+
+function rankColor(rank) {
+  if (rank <= 3) return '#16a34a';
+  if (rank <= 7) return '#65a30d';
+  if (rank <= 15) return '#f59e0b';
+  return '#ef4444';
+}
+
+function renderRankMap(results, business, keyword, centerLat, centerLng) {
+  const card = document.getElementById('results-card');
+  card.classList.remove('hidden');
+
+  document.getElementById('stats').innerHTML = `
+    <div style="font-weight:600;font-size:15px;margin-bottom:8px;">Rank Tracker — "${keyword}"</div>
+    <div style="font-size:13px;color:#666;">Business: <strong>${business}</strong> &nbsp;|&nbsp; Grid: 2×2 &nbsp;|&nbsp; ${results.filter(r=>r.found).length}/4 points ranked</div>
+  `;
+
+  document.getElementById('result-tabs').innerHTML = `<button class="tab active" onclick="switchTab('rankmap',this)">Rank Map</button>`;
+
+  document.getElementById('pane-reviews').innerHTML = `<div id="pane-rankmap" style="min-height:500px;"></div>`;
+  ['overview','photos','posts','captions','fbposts','webresearch'].forEach(p => {
+    const el = document.getElementById('pane-' + p);
+    if (el) el.classList.add('hidden');
+  });
+
+  // Load Leaflet and render
+  if (!window.L) {
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+    document.head.appendChild(link);
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+    document.head.appendChild(script);
+    script.onload = () => initRankMap(results, business, centerLat, centerLng);
+  } else {
+    initRankMap(results, business, centerLat, centerLng);
+  }
+}
+
+function initRankMap(results, business, centerLat, centerLng) {
+  const container = document.getElementById('pane-rankmap');
+  container.style.height = '520px';
+
+  if (window._rankMap) { window._rankMap.remove(); }
+  const map = L.map(container).setView([centerLat, centerLng], 12);
+  window._rankMap = map;
+
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    attribution: '© OpenStreetMap contributors'
+  }).addTo(map);
+
+  // Center pin
+  L.circleMarker([centerLat, centerLng], {
+    radius: 8, color: '#dc2626', fillColor: '#dc2626', fillOpacity: 1, weight: 2
+  }).addTo(map).bindPopup(`<strong>${business}</strong><br>Center point`);
+
+  // Grid rank markers
+  results.forEach(r => {
+    const color = rankColor(r.rank);
+    const label = r.rank > 20 ? '—' : r.rank;
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="background:${color};color:#fff;border-radius:50%;width:36px;height:36px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;border:2px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,0.3);">${label}</div>`,
+      iconSize: [36, 36],
+      iconAnchor: [18, 18]
+    });
+    const topPlaces = r.places ? r.places.slice(0,3).map((p,i) => `${i+1}. ${p}`).join('<br>') : '';
+    L.marker([r.lat, r.lng], { icon }).addTo(map)
+      .bindPopup(`<strong>Rank: ${r.rank > 20 ? 'Not in top 20' : '#' + r.rank}</strong><br><small>Top results here:<br>${topPlaces}</small>`);
+  });
+
+  // Legend
+  const legend = L.control({ position: 'bottomright' });
+  legend.onAdd = () => {
+    const div = L.DomUtil.create('div');
+    div.style.cssText = 'background:#fff;padding:10px;border-radius:8px;font-size:12px;box-shadow:0 1px 4px rgba(0,0,0,0.2);line-height:1.8;';
+    div.innerHTML = `
+      <div style="font-weight:600;margin-bottom:4px;">Ranking</div>
+      <div><span style="background:#16a34a;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">1</span> Top 3</div>
+      <div><span style="background:#65a30d;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">5</span> 4–7</div>
+      <div><span style="background:#f59e0b;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">10</span> 8–15</div>
+      <div><span style="background:#ef4444;color:#fff;border-radius:50%;padding:1px 6px;margin-right:6px;">—</span> Not found</div>
+    `;
+    return div;
+  };
+  legend.addTo(map);
 }
 
 async function runGMBAudit(token) {

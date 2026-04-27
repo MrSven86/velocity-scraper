@@ -3,6 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
 <title>Velocity Scraper</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -2087,13 +2089,50 @@ async function runGMBAudit(token) {
     }
   }
 
-  setProgress(95);
+  // ═══ ADVANCED: Run 3×3 rank tracker grid ═══
+  var rankResults = [];
+  if (isAdvanced && allAudits.length === 1 && businesses[0] && businesses[0].lat) {
+    var b0 = businesses[0];
+    var rkKeyword = mainKeyword || (allAudits[0].biz.categoryName || '').toLowerCase();
+    var gridDim = 3; var spacingKm = 2; var kmPerDeg2 = 111.32; var halfG = 1;
+    var gridPts = [];
+    for (var gy2=0;gy2<gridDim;gy2++) { for (var gx2=0;gx2<gridDim;gx2++) {
+      gridPts.push({lat:b0.lat+((gy2-halfG)*spacingKm)/kmPerDeg2, lng:b0.lng+((gx2-halfG)*spacingKm)/(kmPerDeg2*Math.cos(b0.lat*Math.PI/180)), row:gy2, col:gx2});
+    }}
+
+    var bizNameRk = (allAudits[0].biz.title||'').toLowerCase();
+    var bizPid = allAudits[0].biz.placeId || '';
+
+    for (var gi=0;gi<gridPts.length;gi++) {
+      setStatus('Rank tracker: point '+(gi+1)+'/'+gridPts.length+'...','info');
+      setProgress(92+Math.round((gi/gridPts.length)*6));
+      try {
+        var gRid = await startActor(token,'compass~crawler-google-places',{
+          searchStringsArray:[rkKeyword], lat:String(gridPts[gi].lat), lng:String(gridPts[gi].lng), zoom:14,
+          maxCrawledPlacesPerSearch:20, language:'en', maxReviews:0, maxImages:0
+        });
+        var gPl = await pollRun(token,gRid);
+        var gRk=-1;
+        for(var gpi=0;gpi<(gPl||[]).length;gpi++){
+          var gpn=(gPl[gpi].title||'').toLowerCase();
+          if((bizPid&&gPl[gpi].placeId===bizPid)||gpn===bizNameRk||gpn.includes(bizNameRk)||bizNameRk.includes(gpn)){gRk=gpi;break;}
+        }
+        rankResults.push({lat:gridPts[gi].lat,lng:gridPts[gi].lng,row:gridPts[gi].row,col:gridPts[gi].col,rank:gRk===-1?21:gRk+1,found:gRk!==-1,places:(gPl||[]).slice(0,20).map(function(p){return p.title||'';})});
+      } catch(e){
+        rankResults.push({lat:gridPts[gi].lat,lng:gridPts[gi].lng,row:gridPts[gi].row,col:gridPts[gi].col,rank:99,found:false,places:[]});
+      }
+    }
+  }
+
+  setProgress(99);
   setStatus('Done! ' + allAudits.length + ' businesses audited.', 'info');
 
   window._allAudits = allAudits;
   if (isAdvanced && allAudits.length === 1) {
     allAudits[0].topCompetitor = topCompetitorProfiles[0] || null;
     allAudits[0].topCompetitors = topCompetitorProfiles;
+    allAudits[0].rankResults = rankResults;
+    allAudits[0].rankKeyword = mainKeyword || (allAudits[0].biz.categoryName || '').toLowerCase();
     renderAdvancedAudit(allAudits[0]);
   } else {
     renderBulkAudit(allAudits);
@@ -2619,36 +2658,104 @@ function renderAdvancedAudit(audit) {
   var passed = checks.filter(function(c){return c.ok;}).length;
 
   document.getElementById('stats').innerHTML =
-    '<div class="stat"><div class="stat-num">' + visPct + '%</div><div class="stat-label">' + (isES ? 'visibilidad' : 'visibility') + '</div></div>' +
-    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + inv + '</div><div class="stat-label">' + (isES ? 'invisible' : 'invisible') + '</div></div>' +
+    '<div class="stat"><div class="stat-num">' + visPct + '%</div><div class="stat-label">visibility</div></div>' +
+    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + inv + '</div><div class="stat-label">invisible</div></div>' +
     '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + passed + '/' + checks.length + '</div><div class="stat-label">checklist</div></div>' +
-    '<div class="stat"><div class="stat-num">' + (biz.reviewsCount||0) + '</div><div class="stat-label">' + (isES ? 'reseñas' : 'reviews') + '</div></div>';
+    '<div class="stat"><div class="stat-num">' + (biz.reviewsCount||0) + '</div><div class="stat-label">reviews</div></div>';
 
-  var tabs = '<button class="tab active" onclick="switchAdvTab(\'checklist\',this)">Checklist</button>' +
-    '<button class="tab" onclick="switchAdvTab(\'visibility\',this)">' + (isES ? 'Visibilidad' : 'Visibility') + '</button>';
-  if (comp) {
-    tabs += '<button class="tab" onclick="switchAdvTab(\'comparison\',this)">vs #1</button>';
+  var tabs = '';
+  if (audit.rankResults && audit.rankResults.length > 0) {
+    tabs += '<button class="tab active" onclick="switchAdvTab(\'rankmap\',this)">Rank Map</button>';
+    tabs += '<button class="tab" onclick="switchAdvTab(\'checklist\',this)">Checklist</button>';
+  } else {
+    tabs += '<button class="tab active" onclick="switchAdvTab(\'checklist\',this)">Checklist</button>';
   }
+  tabs += '<button class="tab" onclick="switchAdvTab(\'visibility\',this)">Visibility</button>';
+  if (comp) tabs += '<button class="tab" onclick="switchAdvTab(\'comparison\',this)">vs #1</button>';
   if (audit.topCompetitors && audit.topCompetitors.length > 0) {
-    tabs += '<button class="tab" onclick="switchAdvTab(\'competitors\',this)">' + (isES ? 'Competidores' : 'Competitors') + ' (' + audit.topCompetitors.length + ')</button>';
+    tabs += '<button class="tab" onclick="switchAdvTab(\'competitors\',this)">Competitors (' + audit.topCompetitors.length + ')</button>';
   }
-  tabs += '<button class="tab" onclick="switchAdvTab(\'profile\',this)">' + (isES ? 'Perfil' : 'Profile') + '</button>';
+  tabs += '<button class="tab" onclick="switchAdvTab(\'profile\',this)">Profile</button>';
   document.getElementById('result-tabs').innerHTML = tabs;
 
   window._advAudit = audit;
   window._advChecks = checks;
   window._auditBiz = biz;
   window._auditResults = results;
-  renderAdvChecklist(checks);
+
+  // Render rank map first if available, otherwise checklist
+  if (audit.rankResults && audit.rankResults.length > 0) {
+    renderAdvRankMap(audit);
+  } else {
+    renderAdvChecklist(checks);
+  }
 
   document.getElementById('dl-btns').innerHTML =
-    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAdvancedExcel()">' + (isES ? 'Descargar Auditoría Avanzada (Excel)' : 'Download Advanced Audit (Excel)') + '</button>';
+    '<button class="btn btn-primary" style="grid-column:1/-1;background:#1a56db;" onclick="generatePDF()">📄 Download PDF Report</button>' +
+    '<button class="btn" style="grid-column:1/-1;" onclick="dlAdvancedExcel()">Download Excel</button>';
+}
+
+function renderAdvRankMap(audit) {
+  var biz = audit.biz;
+  var results = audit.rankResults;
+  var keyword = audit.rankKeyword || '';
+  var centerLat = biz.location ? biz.location.lat : (biz.latitude || 0);
+  var centerLng = biz.location ? biz.location.lng : (biz.longitude || 0);
+
+  var html = '<div style="text-align:center;margin-bottom:8px;">';
+  html += '<div style="font-weight:700;font-size:16px;">Rank Tracker — "' + keyword + '"</div>';
+  html += '<div style="font-size:13px;color:#888;">' + (biz.title||'') + '</div>';
+  html += '</div>';
+  html += '<div id="adv-rank-map" style="height:420px;border-radius:12px;overflow:hidden;border:1px solid #e5e7eb;margin-bottom:12px;"></div>';
+  html += '<div style="display:flex;justify-content:center;gap:16px;font-size:12px;">';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#16a34a;vertical-align:middle;margin-right:4px;"></span>Top 3</span>';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#f59e0b;vertical-align:middle;margin-right:4px;"></span>4-7</span>';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#ea580c;vertical-align:middle;margin-right:4px;"></span>8-15</span>';
+  html += '<span><span style="display:inline-block;width:12px;height:12px;border-radius:50%;background:#ef4444;vertical-align:middle;margin-right:4px;"></span>20+</span>';
+  html += '</div>';
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    document.getElementById(p).classList.add('hidden');
+  });
+
+  // Init Leaflet map
+  function loadLeaflet2(cb){if(window.L){cb();return;}var lk=document.createElement('link');lk.rel='stylesheet';lk.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';document.head.appendChild(lk);var sc=document.createElement('script');sc.src='https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';sc.onload=cb;document.head.appendChild(sc);}
+
+  loadLeaflet2(function() {
+    var container = document.getElementById('adv-rank-map');
+    if (!container) return;
+    if (window._advRankMap) { window._advRankMap.remove(); window._advRankMap = null; }
+    var map = L.map(container, {zoomControl:true,attributionControl:false}).setView([centerLat,centerLng],12);
+    window._advRankMap = map;
+
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+
+    // Business pin
+    var pinIcon = L.divIcon({className:'',html:'<div style="position:relative;width:30px;height:42px;"><svg viewBox="0 0 30 42" width="30" height="42"><path d="M15 0C6.7 0 0 6.7 0 15c0 10.5 15 27 15 27s15-16.5 15-27C30 6.7 23.3 0 15 0z" fill="#dc2626"/><circle cx="15" cy="14" r="6" fill="#fff"/></svg></div>',iconSize:[30,42],iconAnchor:[15,42]});
+    L.marker([centerLat,centerLng],{icon:pinIcon}).addTo(map);
+
+    // Grid markers
+    results.forEach(function(r) {
+      var color = rankColor(r.rank);
+      var label = r.rank > 20 ? '20+' : String(r.rank);
+      var sz = 40;
+      var ic = L.divIcon({className:'',html:'<div style="background:'+color+';color:#fff;border-radius:50%;width:'+sz+'px;height:'+sz+'px;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:'+(label.length>2?'12':label.length>1?'14':'17')+'px;border:3px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.35);font-family:system-ui,sans-serif;">'+label+'</div>',iconSize:[sz,sz],iconAnchor:[sz/2,sz/2]});
+      L.marker([r.lat,r.lng],{icon:ic}).addTo(map);
+    });
+
+    var allLats = results.map(function(r){return r.lat;}).concat([centerLat]);
+    var allLngs = results.map(function(r){return r.lng;}).concat([centerLng]);
+    map.fitBounds([[Math.min.apply(null,allLats)-0.005,Math.min.apply(null,allLngs)-0.005],[Math.max.apply(null,allLats)+0.005,Math.max.apply(null,allLngs)+0.005]]);
+  });
 }
 
 function switchAdvTab(tab, btn) {
   document.querySelectorAll('.tab').forEach(function(t){t.classList.remove('active');});
   if (btn) btn.classList.add('active');
-  if (tab === 'checklist') renderAdvChecklist(window._advChecks);
+  if (tab === 'rankmap') renderAdvRankMap(window._advAudit);
+  else if (tab === 'checklist') renderAdvChecklist(window._advChecks);
   else if (tab === 'visibility') renderAdvVisibility(window._advAudit);
   else if (tab === 'comparison') renderComparison(window._advAudit);
   else if (tab === 'competitors') renderCompetitorAnalysis(window._advAudit);
@@ -3241,6 +3348,257 @@ function dlAdvancedExcel() {
 
   var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
   XLSX.writeFile(wb, 'advanced-audit-' + name + '.xlsx');
+}
+
+async function generatePDF() {
+  var audit = window._advAudit;
+  var checks = window._advChecks;
+  if (!audit) { alert('No audit data'); return; }
+
+  var biz = audit.biz;
+  var results = audit.results;
+  var comp = audit.topCompetitor;
+  var allComps = audit.topCompetitors || [];
+  var rankResults = audit.rankResults || [];
+  var rankKeyword = audit.rankKeyword || '';
+  var barrio = audit.barrio || '';
+  var cats = biz.categories || [];
+  var vis = results.filter(function(r){return r.found;}).length;
+  var visPct = Math.round(vis / results.length * 100);
+  var today = new Date().toLocaleDateString('en-US',{year:'numeric',month:'long',day:'numeric'});
+
+  // Step 1: Capture map screenshot if map exists
+  var mapImg = '';
+  var mapContainer = document.getElementById('adv-rank-map');
+  if (mapContainer) {
+    try {
+      var canvas = await html2canvas(mapContainer, {useCORS:true, allowTaint:true, scale:2, logging:false});
+      mapImg = canvas.toDataURL('image/png');
+    } catch(e) { console.log('Map capture failed:', e); }
+  }
+
+  // Step 2: Build report HTML
+  var h = '';
+  h += '<div style="font-family:system-ui,-apple-system,sans-serif;color:#111;line-height:1.5;max-width:760px;margin:0 auto;">';
+
+  // Header
+  h += '<div style="display:flex;justify-content:space-between;align-items:center;padding-bottom:12px;border-bottom:1px solid #e5e7eb;margin-bottom:24px;">';
+  h += '<span style="color:#1a56db;font-weight:800;letter-spacing:4px;font-size:11px;">VELOCITY WEB</span>';
+  h += '<span style="color:#888;font-size:12px;">Online Presence Analysis</span>';
+  h += '</div>';
+
+  // Title
+  h += '<h1 style="font-size:32px;font-weight:800;margin:0 0 4px;">' + (biz.title||'') + '</h1>';
+  h += '<p style="color:#888;font-size:14px;margin:0 0 24px;">' + barrio + ' &bull; ' + (biz.categoryName||'') + ' &bull; ' + today + '</p>';
+
+  // Score boxes
+  var visColor = visPct >= 50 ? '#16a34a' : '#dc2626';
+  var ratingColor = (biz.totalScore||0) >= 4 ? '#16a34a' : '#dc2626';
+  var visMsg = visPct === 0 ? 'Completely invisible' : (visPct < 50 ? 'Low visibility — needs optimization' : 'Showing in some searches');
+  var ratingMsg = (biz.reviewsCount||0) === 0 ? 'No reviews — customers can\'t trust' : ((biz.totalScore||0) < 4 ? 'Rating needs improvement' : 'Good rating');
+
+  h += '<div style="display:flex;gap:16px;margin-bottom:24px;">';
+  h += '<div style="flex:1;border:2px solid ' + visColor + ';border-radius:8px;padding:20px;text-align:center;">';
+  h += '<div style="font-size:10px;letter-spacing:2px;color:#555;font-weight:700;margin-bottom:8px;">GOOGLE VISIBILITY</div>';
+  h += '<div style="font-size:52px;font-weight:800;color:' + visColor + ';line-height:1;">' + visPct + '%</div>';
+  h += '<div style="font-size:12px;color:#888;margin-top:4px;">Showing in ' + vis + '/' + results.length + ' relevant searches</div>';
+  h += '<div style="font-size:12px;color:' + visColor + ';font-weight:600;margin-top:2px;">' + visMsg + '</div>';
+  h += '</div>';
+  h += '<div style="flex:1;border:2px solid ' + ratingColor + ';border-radius:8px;padding:20px;text-align:center;">';
+  h += '<div style="font-size:10px;letter-spacing:2px;color:#555;font-weight:700;margin-bottom:8px;">RATING</div>';
+  h += '<div style="font-size:52px;font-weight:800;color:' + ratingColor + ';line-height:1;">' + (biz.totalScore||0) + ' <span style="color:#f59e0b;">★</span></div>';
+  h += '<div style="font-size:12px;color:#888;margin-top:4px;">' + (biz.reviewsCount||0) + ' reviews &bull; ' + (biz.imageCount||biz.imagesCount||0) + ' photos</div>';
+  h += '<div style="font-size:12px;color:' + ratingColor + ';font-weight:600;margin-top:2px;">' + ratingMsg + '</div>';
+  h += '</div></div>';
+
+  // Rank tracker map
+  if (mapImg) {
+    h += '<div style="text-align:center;margin-bottom:8px;">';
+    h += '<div style="font-weight:600;font-size:14px;color:#444;">Rank Tracker — "' + rankKeyword + '"</div>';
+    h += '<div style="font-size:12px;color:#888;margin-bottom:8px;">' + (biz.title||'') + '</div>';
+    h += '<img src="' + mapImg + '" style="width:100%;border-radius:8px;border:1px solid #e5e7eb;" />';
+    h += '<div style="display:flex;justify-content:center;gap:16px;font-size:11px;margin-top:6px;">';
+    h += '<span>🟢 Top 3</span><span>🟡 4-7</span><span>🟠 8-15</span><span>🔴 20+</span>';
+    h += '</div></div>';
+  }
+
+  // Business details
+  h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Business Details</h2>';
+  h += '<table style="width:100%;font-size:13px;border-collapse:collapse;">';
+  var details = [
+    ['Business', biz.title||''],
+    ['Category', biz.categoryName||''],
+    ['Address', biz.address||''],
+    ['Phone', biz.phone||''],
+    ['Website', biz.website||'<span style="color:#dc2626;font-weight:600;">NO WEBSITE</span>'],
+    ['Secondary categories', cats.length>1 ? cats.slice(1).join(', ') : '<span style="color:#dc2626;">None configured</span>'],
+  ];
+  details.forEach(function(d) {
+    h += '<tr><td style="padding:6px 0;color:#888;width:180px;vertical-align:top;">' + d[0] + '</td><td style="padding:6px 0;font-weight:500;">' + d[1] + '</td></tr>';
+  });
+  h += '</table>';
+
+  // Checklist
+  h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Profile Optimization Checklist</h2>';
+  h += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+  h += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">STEP</th><th style="padding:8px;text-align:left;">ITEM</th><th style="padding:8px;text-align:left;">STATUS</th><th style="padding:8px;text-align:left;">ACTION NEEDED</th></tr>';
+  checks.forEach(function(c) {
+    var sc = c.ok ? '#16a34a' : '#dc2626';
+    h += '<tr style="border-bottom:1px solid #f3f4f6;">';
+    h += '<td style="padding:6px 8px;font-weight:700;">' + (c.step||'') + '</td>';
+    h += '<td style="padding:6px 8px;">' + c.label + '</td>';
+    h += '<td style="padding:6px 8px;color:' + sc + ';font-weight:600;">' + (c.ok?'✓ ':'✗ ') + c.value + '</td>';
+    h += '<td style="padding:6px 8px;color:#666;">' + (c.ok?'—':(c.action||'')) + '</td>';
+    h += '</tr>';
+  });
+  h += '</table>';
+
+  // Visibility results
+  h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Visibility Results</h2>';
+  h += '<table style="width:100%;font-size:12px;border-collapse:collapse;">';
+  h += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">SEARCH</th><th style="padding:8px;">VISIBLE?</th><th style="padding:8px;">POS.</th><th style="padding:8px;text-align:left;">WHO SHOWS UP INSTEAD</th><th style="padding:8px;">RATING</th><th style="padding:8px;">REVIEWS</th></tr>';
+  results.forEach(function(r) {
+    var c1 = r.topCompetitors[0]||{};
+    h += '<tr style="border-bottom:1px solid #f3f4f6;">';
+    h += '<td style="padding:6px 8px;font-weight:600;">' + r.keyword + '</td>';
+    h += '<td style="padding:6px 8px;text-align:center;color:' + (r.found?'#16a34a':'#dc2626') + ';font-weight:700;">' + (r.found?'✓ YES':'✗ NO') + '</td>';
+    h += '<td style="padding:6px 8px;text-align:center;">' + (r.found?'#'+r.position:'—') + '</td>';
+    h += '<td style="padding:6px 8px;">' + (c1.name||'') + '</td>';
+    h += '<td style="padding:6px 8px;text-align:center;">' + (c1.rating?c1.rating+' ★':'') + '</td>';
+    h += '<td style="padding:6px 8px;text-align:center;">' + (c1.reviews||'') + '</td>';
+    h += '</tr>';
+    var c2 = r.topCompetitors[1]||{};
+    if (!r.found && c2.name) {
+      h += '<tr style="border-bottom:1px solid #f3f4f6;"><td></td><td></td><td></td>';
+      h += '<td style="padding:4px 8px;color:#888;">' + c2.name + '</td>';
+      h += '<td style="padding:4px 8px;text-align:center;color:#888;">' + (c2.rating?c2.rating+' ★':'') + '</td>';
+      h += '<td style="padding:4px 8px;text-align:center;color:#888;">' + (c2.reviews||'') + '</td></tr>';
+    }
+  });
+  h += '</table>';
+
+  // Comparison with #1
+  if (comp) {
+    h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Comparison with #1 in the Area</h2>';
+    h += '<table style="width:100%;font-size:13px;border-collapse:collapse;">';
+    h += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">METRIC</th><th style="padding:8px;text-align:left;">YOU — ' + (biz.title||'').toUpperCase().slice(0,30) + '</th><th style="padding:8px;text-align:left;">#1 — ' + (comp.title||'').toUpperCase().slice(0,30) + '</th></tr>';
+    var compRows = [
+      ['Rating', (biz.totalScore||0)+' ★', (comp.totalScore||0)+' ★'],
+      ['Reviews', biz.reviewsCount||0, comp.reviewsCount||0],
+      ['Photos', biz.imageCount||biz.imagesCount||0, comp.imageCount||comp.imagesCount||0],
+      ['Categories', cats.length, (comp.categories||[]).length],
+      ['Description', biz.description?'Yes':'<span style="color:#dc2626;">No</span>', comp.description?'Yes':'<span style="color:#dc2626;">No</span>'],
+      ['Website', biz.website?'Yes':'<span style="color:#dc2626;">No</span>', comp.website?'<strong>Yes</strong>':'No'],
+      ['Hours', (biz.openingHours&&biz.openingHours.length)?'Yes':'No', (comp.openingHours&&comp.openingHours.length)?'Yes':'No'],
+    ];
+    compRows.forEach(function(row,i) {
+      h += '<tr style="border-bottom:1px solid #f3f4f6;background:' + (i%2===0?'#fff':'#f9fafb') + ';">';
+      h += '<td style="padding:6px 8px;font-weight:600;">' + row[0] + '</td>';
+      h += '<td style="padding:6px 8px;">' + row[1] + '</td>';
+      h += '<td style="padding:6px 8px;font-weight:600;">' + row[2] + '</td>';
+      h += '</tr>';
+    });
+    h += '</table>';
+  }
+
+  // Competitor categories + top competitors table
+  if (allComps.length > 0) {
+    // Missing categories
+    var compCatCount = {};
+    allComps.forEach(function(cc) {
+      (cc.categories||[]).forEach(function(cat) {
+        if (!compCatCount[cat]) compCatCount[cat] = 0;
+        compCatCount[cat]++;
+      });
+    });
+    var yourCatSet = {};
+    cats.forEach(function(c){yourCatSet[c]=true;});
+    var missingCats = Object.keys(compCatCount).filter(function(c){return !yourCatSet[c];}).sort(function(a,b){return compCatCount[b]-compCatCount[a];});
+
+    if (missingCats.length > 0) {
+      h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Categories Competitors Use That You Don\'t Have</h2>';
+      h += '<table style="width:100%;font-size:13px;border-collapse:collapse;">';
+      h += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">CATEGORY</th><th style="padding:8px;">USED BY</th></tr>';
+      missingCats.slice(0,8).forEach(function(cat) {
+        h += '<tr style="border-bottom:1px solid #f3f4f6;"><td style="padding:6px 8px;">→ ' + cat + '</td><td style="padding:6px 8px;text-align:center;">' + compCatCount[cat] + ' competitor(s)</td></tr>';
+      });
+      h += '</table>';
+    }
+
+    // Top competitors
+    h += '<h2 style="font-size:18px;font-weight:700;margin:28px 0 12px;padding-bottom:4px;border-bottom:2px solid #1a56db;">Top Competitors in the Area</h2>';
+    h += '<table style="width:100%;font-size:11px;border-collapse:collapse;">';
+    h += '<tr style="background:#f3f4f6;"><th style="padding:6px;text-align:left;">#</th><th style="padding:6px;text-align:left;">NAME</th><th style="padding:6px;">PRIMARY CAT.</th><th style="padding:6px;">SECONDARY</th><th style="padding:6px;">★</th><th style="padding:6px;">REVIEWS</th><th style="padding:6px;">PHOTOS</th><th style="padding:6px;">WEB</th></tr>';
+    allComps.forEach(function(cc,i) {
+      var ccCats = cc.categories||[];
+      h += '<tr style="border-bottom:1px solid #f3f4f6;">';
+      h += '<td style="padding:4px 6px;font-weight:700;">' + (i+1) + '</td>';
+      h += '<td style="padding:4px 6px;">' + (cc.title||'') + '</td>';
+      h += '<td style="padding:4px 6px;">' + (cc.categoryName||ccCats[0]||'') + '</td>';
+      h += '<td style="padding:4px 6px;font-size:10px;">' + (ccCats.slice(1).join(', ')||'—') + '</td>';
+      h += '<td style="padding:4px 6px;text-align:center;">' + (cc.totalScore||'') + '</td>';
+      h += '<td style="padding:4px 6px;text-align:center;">' + (cc.reviewsCount||'') + '</td>';
+      h += '<td style="padding:4px 6px;text-align:center;">' + (cc.imageCount||cc.imagesCount||'') + '</td>';
+      h += '<td style="padding:4px 6px;text-align:center;">' + (cc.website?'Yes':'No') + '</td>';
+      h += '</tr>';
+    });
+    h += '</table>';
+
+    // Recommendation
+    var primaryPool = {};
+    allComps.forEach(function(cc) { var p=cc.categoryName||''; if(p){if(!primaryPool[p])primaryPool[p]=0;primaryPool[p]++;} });
+    var recPrimary = Object.keys(primaryPool).sort(function(a,b){return primaryPool[b]-primaryPool[a];})[0] || biz.categoryName || '';
+    var recSec = missingCats.slice(0,3);
+
+    h += '<div style="margin:24px 0;padding:16px;background:#fff8e1;border-radius:8px;border-left:4px solid #f59e0b;">';
+    h += '<div style="font-weight:700;margin-bottom:6px;">💡 Recommendation</div>';
+    h += '<div style="font-size:13px;">Recommended primary category: <strong>' + recPrimary + '</strong></div>';
+    if (recSec.length > 0) {
+      h += '<div style="font-size:13px;margin-top:4px;">Suggested secondary: ' + recSec.join(', ') + '</div>';
+    }
+    var titleCheck = (biz.title||'').toLowerCase().includes(recPrimary.toLowerCase());
+    h += '<div style="font-size:13px;margin-top:4px;">Keyword in title: ' + (titleCheck ? '✓ Yes' : '✗ No — consider adding') + '</div>';
+    h += '</div>';
+  }
+
+  // Footer - sales pitch
+  h += '<div style="margin-top:32px;padding:20px;background:#f9fafb;border-radius:8px;font-size:13px;color:#555;line-height:1.7;">';
+  h += 'The checklist above covers the basics. To truly show up when customers search for your services, you need a professional website connected to WhatsApp, an automated review system that filters negative reviews before they reach Google, and ongoing monthly profile optimization. That\'s what we do at Velocity Web — and we can help you implement all of it.';
+  h += '</div>';
+
+  // Brand footer
+  h += '<div style="margin-top:16px;padding-top:12px;border-top:1px solid #e5e7eb;display:flex;justify-content:space-between;font-size:11px;color:#888;">';
+  h += '<span style="color:#1a56db;font-weight:800;letter-spacing:3px;">VELOCITY WEB</span>';
+  h += '<span>velocityweb.org &bull; Report generated ' + today + '</span>';
+  h += '</div>';
+
+  h += '</div>';
+
+  // Step 3: Generate PDF
+  var wrapper = document.createElement('div');
+  wrapper.innerHTML = h;
+  wrapper.style.position = 'absolute';
+  wrapper.style.left = '-9999px';
+  wrapper.style.width = '794px';
+  wrapper.style.background = '#fff';
+  wrapper.style.padding = '32px';
+  document.body.appendChild(wrapper);
+
+  try {
+    var bizSlug = (biz.title||'report').toLowerCase().replace(/[^a-z0-9]+/g,'-').slice(0,40);
+    await html2pdf().set({
+      margin: [10,10,10,10],
+      filename: 'audit-' + bizSlug + '.pdf',
+      image: {type:'jpeg', quality:0.95},
+      html2canvas: {scale:2, useCORS:true, allowTaint:true, logging:false},
+      jsPDF: {unit:'mm', format:'a4', orientation:'portrait'},
+      pagebreak: {mode:['avoid-all','css','legacy']},
+    }).from(wrapper).save();
+  } catch(e) {
+    alert('PDF generation failed: ' + e.message);
+  }
+
+  document.body.removeChild(wrapper);
 }
 
 function dlBulkAuditExcel() {

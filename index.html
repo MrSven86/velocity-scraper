@@ -95,7 +95,7 @@
       <label>Instagram handle</label>
       <input type="text" id="all-ig" placeholder="https://www.instagram.com/lapelu.belgrano/ or just lapelu.belgrano" />
       <label>Business name + city (optional — auto-detected from Maps)</label>
-      <input type="text" id="all-name" placeholder="La pelu, Belgrano, Buenos Aires — leave blank if Maps URL provided" />
+      <input type="text" id="all-name" placeholder="Business name, City — leave blank if Maps URL provided" />
       <label>Facebook page URL (optional)</label>
       <input type="text" id="all-fb" placeholder="https://www.facebook.com/pagename/" />
       <label>Extra links (optional) — one URL per line</label>
@@ -121,15 +121,15 @@
     <div id="special-fields" class="hidden">
       <div class="tip">Paste up to 20 search queries — one per line. The city/country below is applied to ALL queries. Each query returns up to 500 results. Downloads Excel with only businesses that have NO website.</div>
       <label>City / Country (applied to all queries)</label>
-      <input type="text" id="special-location" placeholder="Buenos Aires, Argentina" />
+      <input type="text" id="special-location" placeholder="City, Country" />
       <label>Search queries (one per line, max 20)</label>
-      <textarea id="special-keywords" rows="8" placeholder="dentista
-peluquería
-pintor
-restaurante
-estudio contable
-clínica dental
-veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <textarea id="special-keywords" rows="8" placeholder="dentist
+hair salon
+painter
+restaurant
+accountant
+dental clinic
+vet" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
       <div style="display:flex;gap:12px;margin-top:4px;">
         <span id="keyword-count" style="font-size:12px;color:#999;">0 / 20 queries</span>
       </div>
@@ -152,33 +152,20 @@ veterinaria" style="width:100%;box-sizing:border-box;font-family:inherit;font-si
     <div id="audit-fields" class="hidden">
       <div class="tip" style="background:#fef2f2;border-color:#fca5a5;">Paste one or more Google Maps URLs (one per line). Each business gets audited and added to a single Excel report. Red lines = invisible = your sale.</div>
       <label>Google Maps URLs (one per line — max 30)</label>
-      <textarea id="audit-urls" rows="5" placeholder="https://www.google.com/maps/place/Plomero+gasista/...
-https://www.google.com/maps/place/Dr+Cifuentes/...
-https://www.google.com/maps/place/Peluqueria+Ana/..." style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <textarea id="audit-urls" rows="5" placeholder="https://www.google.com/maps/place/Business+1/...
+https://www.google.com/maps/place/Business+2/...
+https://www.google.com/maps/place/Business+3/..." style="width:100%;box-sizing:border-box;font-family:inherit;font-size:13px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
       <div style="font-size:12px;color:#999;margin-top:4px;"><span id="audit-url-count">0</span> / 30 businesses</div>
       <label>Main keyword (what customers actually search)</label>
-      <input type="text" id="audit-main-keyword" value="plomero" placeholder="plomero, dentista, peluquería..." />
+      <input type="text" id="audit-main-keyword" placeholder="plumber, dentist, hair salon..." />
       <label>Extra keywords (one per line)</label>
-      <textarea id="audit-extra-keywords" rows="3" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;">destapaciones
-plomero gasista
-urgencias 24hs</textarea>
-      <div style="display:flex;gap:12px;margin-top:8px;">
-        <div style="flex:1;">
-          <label>Search radius</label>
-          <select id="audit-radius">
-            <option value="1000">1 km</option>
-            <option value="2000" selected>2 km</option>
-            <option value="5000">5 km</option>
-          </select>
-        </div>
-        <div style="flex:1;">
-          <label>Report language</label>
-          <select id="audit-lang">
-            <option value="es" selected>Español</option>
-            <option value="en">English</option>
-          </select>
-        </div>
-      </div>
+      <textarea id="audit-extra-keywords" rows="3" placeholder="emergency plumber&#10;drain cleaning&#10;24h service" style="width:100%;box-sizing:border-box;font-family:inherit;font-size:14px;padding:10px;border:1px solid #ddd;border-radius:8px;resize:vertical;"></textarea>
+      <label>Search radius</label>
+      <select id="audit-radius">
+        <option value="1000">1 km</option>
+        <option value="2000" selected>2 km</option>
+        <option value="5000">5 km</option>
+      </select>
       <div style="margin-top:10px;padding:10px;background:#fff8e1;border:1px solid #f59e0b;border-radius:8px;">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;margin:0;">
           <input type="checkbox" id="audit-advanced" style="width:18px;height:18px;" />
@@ -365,7 +352,7 @@ async function scrapeAll(token) {
     const city = parts.slice(1).join(',').trim();
     promises.push(startActor(token, 'apify~google-search-scraper', {
       queries: [bizName, bizName + ' Instagram', bizName + ' sitio web'].join('\n'),
-      resultsPerPage: 5, maxPagesPerQuery: 1, languageCode: 'es', countryCode: 'ar',
+      resultsPerPage: 5, maxPagesPerQuery: 1, languageCode: 'en', countryCode: 'us',
     }).then(runId => pollRun(token, runId)).then(async (results) => {
       const allResults = [];
       for (const page of results) {
@@ -789,7 +776,7 @@ async function scrapeSpecial(token) {
       var gmapsInput = {
         searchStringsArray: [query],
         maxCrawledPlacesPerSearch: maxResults,
-        language: 'es',
+        language: 'en',
         maxReviews: 0,
         maxImages: 0,
         scrapeReviewerInfo: false,
@@ -938,46 +925,6 @@ function checkVisibility(bizName, kwResults) {
     else { comps.push({name: kwResults[j].title||'', rating: kwResults[j].totalScore||0, reviews: kwResults[j].reviewsCount||0, categories: kwResults[j].categories||[]}); }
   }
   return {found: found, position: position, topCompetitors: comps.slice(0,3)};
-}
-
-function cleanBarrio(raw) {
-  if (!raw) return '';
-  return raw
-    .split(',')
-    .map(function(s) { return s.trim(); })
-    .filter(function(s) { return s && !/comuna/i.test(s) && !/^\d+$/.test(s); })
-    .map(function(s) { return s.replace(/^barrio\s+/i, ''); })
-    [0] || '';
-}
-
-async function detectBarrio(biz) {
-  var barrio = cleanBarrio(biz.neighborhood || biz.subLocality || '');
-  var bizLat = biz.location && biz.location.lat ? biz.location.lat : (biz.latitude || null);
-  var bizLng = biz.location && biz.location.lng ? biz.location.lng : (biz.longitude || null);
-
-  if (!barrio && bizLat && bizLng) {
-    try {
-      var geoResp = await fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + bizLat + '&lon=' + bizLng + '&zoom=16&addressdetails=1', {
-        headers: {'User-Agent': 'VelocityScraper/1.0'}
-      });
-      if (geoResp.ok) {
-        var geoData = await geoResp.json();
-        var addr = geoData.address || {};
-        barrio = cleanBarrio(addr.suburb || addr.neighbourhood || addr.quarter || addr.city_district || '');
-      }
-    } catch(e) {}
-    await sleep(1100);
-  }
-  if (!barrio) {
-    var addrParts = (biz.address || '').split(',').map(function(s){return s.trim();});
-    for (var ap = 1; ap < addrParts.length - 1; ap++) {
-      var part = addrParts[ap].replace(/^[A-Z]\d{4}\s*/, '').trim();
-      if (part && !part.includes('Cdad') && !part.includes('Autónoma') && !part.includes('Argentina') && !part.includes('Buenos Aires') && part.length > 2 && part.length < 30) {
-        barrio = part; break;
-      }
-    }
-  }
-  return barrio;
 }
 
 async function runRankTracker(token) {
@@ -1292,7 +1239,7 @@ async function runGMBAudit(token) {
   var profileInput = {
     startUrls: startUrls,
     maxCrawledPlacesPerSearch: 1,
-    language: 'es',
+    language: 'en',
     maxReviews: isAdvanced ? 5 : 0,
     maxImages: 0,
     scrapeReviewerInfo: false,
@@ -1340,10 +1287,10 @@ async function runGMBAudit(token) {
 
   if (matchedProfiles.length === 0) matchedProfiles = allProfiles;
 
-  setStatus('Step 1/3 — Got ' + matchedProfiles.length + ' profiles. Detecting neighborhoods...', 'info');
+  setStatus('Step 1/3 — Got ' + matchedProfiles.length + ' profiles. Building keywords...', 'info');
   setProgress(35);
 
-  // ═══ STEP 2: Detect barrios + build keywords for each business ═══
+  // ═══ STEP 2: Build keywords for each business ═══
   var businesses = [];
   var allSearchKeywords = [];
   var bizKeywordMap = [];
@@ -1351,19 +1298,11 @@ async function runGMBAudit(token) {
   for (var i = 0; i < matchedProfiles.length; i++) {
     var biz = matchedProfiles[i];
 
-    setStatus('Step 2/3 — Detecting barrio for ' + (biz.title || 'business ' + (i+1)) + '...', 'info');
-
-    var barrio = await detectBarrio(biz);
-    biz._barrio = barrio;
-
-    // Build keywords for this business
-    // NOTE: barrio is NOT added to search queries — coordinates handle location.
-    // Barrio is kept for display purposes only.
+    // Build keywords for this business — coordinates handle location
     var cat = mainKeyword || (biz.categoryName || '').toLowerCase();
     var keywords = [];
     if (cat) {
       keywords.push(cat);
-      keywords.push(cat + ' cerca de mi');
     }
     for (var e = 0; e < extraKeywords.length; e++) {
       keywords.push(extraKeywords[e]);
@@ -1382,7 +1321,6 @@ async function runGMBAudit(token) {
 
     businesses.push({
       biz: biz,
-      barrio: barrio,
       keywords: uniq,
       lat: bizLat,
       lng: bizLng,
@@ -1412,7 +1350,7 @@ async function runGMBAudit(token) {
   var searchInput = {
     searchStringsArray: uniqueAllKw,
     maxCrawledPlacesPerSearch: 20,
-    language: 'es',
+    language: 'en',
     maxReviews: 0, maxImages: 0, scrapeReviewerInfo: false,
   };
 
@@ -1467,7 +1405,7 @@ async function runGMBAudit(token) {
       });
     }
 
-    allAudits.push({biz: b.biz, results: auditResults, barrio: b.barrio});
+    allAudits.push({biz: b.biz, results: auditResults});
   }
 
   // ═══ ADVANCED: Scrape top competitors' full profiles ═══
@@ -1498,7 +1436,7 @@ async function runGMBAudit(token) {
         var compSearchInput = {
           searchStringsArray: compNames,
           maxCrawledPlacesPerSearch: 1,
-          language: 'es',
+          language: 'en',
           maxReviews: 0,
           maxImages: 0,
           scrapeReviewerInfo: false,
@@ -1615,7 +1553,7 @@ function renderBulkAudit(audits) {
     // Header row: name + scores
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
     html += '<div><strong style="font-size:15px;">' + (biz.title || '') + '</strong>';
-    html += '<div style="font-size:12px;color:#888;">' + (biz.categoryName || '') + ' · ' + (audit.barrio || '') + ' · ' + (biz.phone || 'no phone') + '</div></div>';
+    html += '<div style="font-size:12px;color:#888;">' + (biz.categoryName || '') + ' · ' + (biz.phone || 'no phone') + '</div></div>';
     html += '<div style="text-align:right;">';
     html += '<div style="font-size:16px;font-weight:700;color:' + (health.passed < health.total * 0.5 ? '#dc2626' : '#16a34a') + ';">' + health.passed + '/' + health.total + '</div>';
     html += '<div style="font-size:11px;color:#888;">profile score</div>';
@@ -1791,10 +1729,8 @@ function renderAdvancedAudit(audit) {
   var vis = results.filter(function(r){return r.found;}).length;
   var inv = results.filter(function(r){return !r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
 
-  var checks = buildGMBChecklist(biz, results, isES);
+  var checks = buildGMBChecklist(biz, results);
   var passed = checks.filter(function(c){return c.ok;}).length;
 
   document.getElementById('stats').innerHTML =
@@ -1902,7 +1838,7 @@ function switchAdvTab(tab, btn) {
   else if (tab === 'profile') renderAuditProfile();
 }
 
-function buildGMBChecklist(biz, results, isES) {
+function buildGMBChecklist(biz, results) {
   var checks = [];
   var cats = biz.categories || [];
   var vis = results.filter(function(r){return r.found;}).length;
@@ -1916,148 +1852,140 @@ function buildGMBChecklist(biz, results, isES) {
   var hasAddress = biz.address && biz.address.trim() !== '';
 
   // ═══ SECTION A: BASICS ═══
-  checks.push({section: 'A', step: 'A1', label: isES ? 'Teléfono' : 'Phone number',
+  checks.push({section: 'A', step: 'A1', label: 'Phone number',
     ok: hasPhone,
-    value: hasPhone ? biz.phone : (isES ? 'FALTA' : 'MISSING'),
-    action: isES ? 'Agregar número de teléfono' : 'Add phone number',
+    value: hasPhone ? biz.phone : ('MISSING'),
+    action: 'Add phone number',
   });
 
-  checks.push({section: 'A', step: 'A2', label: isES ? 'Dirección' : 'Address',
+  checks.push({section: 'A', step: 'A2', label: 'Address',
     ok: hasAddress,
-    value: hasAddress ? biz.address : (isES ? 'FALTA' : 'MISSING'),
-    action: isES ? 'Agregar dirección precisa' : 'Add accurate address',
+    value: hasAddress ? biz.address : ('MISSING'),
+    action: 'Add accurate address',
   });
 
-  checks.push({section: 'A', step: 'A3', label: isES ? 'Horarios de atención' : 'Opening hours',
+  checks.push({section: 'A', step: 'A3', label: 'Opening hours',
     ok: hasHours,
-    value: hasHours ? (isES ? 'Configurados' : 'Set') : (isES ? 'NO CONFIGURADOS' : 'NOT SET'),
-    action: isES ? 'Configurar horarios correctos' : 'Set correct opening hours',
+    value: hasHours ? ('Set') : ('NOT SET'),
+    action: 'Set correct opening hours',
   });
 
-  checks.push({section: 'A', step: 'A4', label: isES ? 'Descripción del negocio (mín 200 chars)' : 'Business description (min 200 chars)',
+  checks.push({section: 'A', step: 'A4', label: 'Business description (min 200 chars)',
     ok: hasDesc,
-    value: hasDesc ? (biz.description.length + (isES ? ' caracteres ✓' : ' chars ✓')) : (shortDesc ? (biz.description.length + (isES ? ' caracteres — muy corta' : ' chars — too short')) : (isES ? 'VACÍA' : 'EMPTY')),
-    action: hasDesc ? '' : (isES ? 'Escribir descripción de mín 200 caracteres (244 se muestran)' : 'Write description of min 200 chars (244 shown)'),
+    value: hasDesc ? (biz.description.length + (' chars ✓')) : (shortDesc ? (biz.description.length + (' chars — too short')) : ('EMPTY')),
+    action: hasDesc ? '' : ('Write description of min 200 chars (244 shown)'),
   });
 
   // Opening date / years in business
   var hasYears = biz.yearsInBusiness || biz.openingDate;
-  checks.push({section: 'A', step: 'A5', label: isES ? 'Fecha de apertura (años en el negocio)' : 'Opening date (years in business)',
+  checks.push({section: 'A', step: 'A5', label: 'Opening date (years in business)',
     ok: !!hasYears,
-    value: hasYears ? (biz.yearsInBusiness ? biz.yearsInBusiness + (isES ? ' años' : ' years') : (isES ? 'Configurada' : 'Set')) : (isES ? 'NO CONFIGURADA' : 'NOT SET'),
-    action: hasYears ? '' : (isES ? 'Agregar fecha de apertura — Google muestra "X años en el negocio"' : 'Add opening date — Google shows "X years in business"'),
+    value: hasYears ? (biz.yearsInBusiness ? biz.yearsInBusiness + (' years') : ('Set')) : ('NOT SET'),
+    action: hasYears ? '' : ('Add opening date — Google shows "X years in business"'),
   });
 
   // Service areas
   var hasServiceAreas = biz.serviceArea || biz.serviceAreas;
-  checks.push({section: 'A', step: 'A6', label: isES ? 'Áreas de servicio' : 'Service areas',
+  checks.push({section: 'A', step: 'A6', label: 'Service areas',
     ok: !!hasServiceAreas,
-    value: hasServiceAreas ? (isES ? 'Configuradas' : 'Set') : (isES ? 'SIN ÁREAS DE SERVICIO' : 'NO SERVICE AREAS'),
-    action: hasServiceAreas ? '' : (isES ? 'Agregar áreas de servicio' : 'Add service areas'),
+    value: hasServiceAreas ? ('Set') : ('NO SERVICE AREAS'),
+    action: hasServiceAreas ? '' : ('Add service areas'),
   });
 
   // Photos + cover photo + logo
-  checks.push({section: 'A', step: 'A7', label: isES ? 'Fotos (mínimo 10)' : 'Photos (minimum 10)',
+  checks.push({section: 'A', step: 'A7', label: 'Photos (minimum 10)',
     ok: photos >= 10,
-    value: photos + (isES ? ' fotos' : ' photos'),
-    action: photos >= 10 ? '' : (isES ? 'Subir más fotos — mínimo 10, competidores tienen 30+. Foto de portada: 1024x576px' : 'Upload more photos — minimum 10, competitors have 30+. Cover photo: 1024x576px'),
+    value: photos + (' photos'),
+    action: photos >= 10 ? '' : ('Upload more photos — minimum 10, competitors have 30+. Cover photo: 1024x576px'),
   });
 
   var hasLogo = biz.logoUrl || biz.logo;
   checks.push({section: 'A', step: 'A8', label: 'Logo',
     ok: !!hasLogo,
-    value: hasLogo ? '✓' : (isES ? 'SIN LOGO' : 'NO LOGO'),
-    action: hasLogo ? '' : (isES ? 'Agregar logo — 720x720px PNG' : 'Add logo — 720x720px PNG'),
+    value: hasLogo ? '✓' : ('NO LOGO'),
+    action: hasLogo ? '' : ('Add logo — 720x720px PNG'),
   });
 
   // Services/products
   var hasServices = biz.additionalInfo || biz.services;
-  checks.push({section: 'A', step: 'A9', label: isES ? 'Servicios / Productos' : 'Services / Products',
+  checks.push({section: 'A', step: 'A9', label: 'Services / Products',
     ok: !!hasServices,
-    value: hasServices ? (isES ? 'Tiene servicios' : 'Has services') : (isES ? 'SIN SERVICIOS' : 'NO SERVICES'),
-    action: hasServices ? '' : (isES ? 'Agregar 3-5 servicios con descripción + 3-5 productos con precio fijo' : 'Add 3-5 services with descriptions + 3-5 fixed price products'),
+    value: hasServices ? ('Has services') : ('NO SERVICES'),
+    action: hasServices ? '' : ('Add 3-5 services with descriptions + 3-5 fixed price products'),
   });
 
   // Posts/updates
   var hasPosts = biz.posts || biz.updatesCount;
-  checks.push({section: 'A', step: 'A10', label: isES ? 'Publicaciones / Actualizaciones' : 'Posts / Updates',
+  checks.push({section: 'A', step: 'A10', label: 'Posts / Updates',
     ok: !!hasPosts,
-    value: hasPosts ? (isES ? 'Tiene publicaciones' : 'Has posts') : (isES ? 'SIN PUBLICACIONES' : 'NO POSTS'),
-    action: hasPosts ? '' : (isES ? 'Agregar publicaciones regulares, fotos y actualizaciones' : 'Add regular posts, photos and updates'),
+    value: hasPosts ? ('Has posts') : ('NO POSTS'),
+    action: hasPosts ? '' : ('Add regular posts, photos and updates'),
   });
 
   // ═══ SECTION B: CATEGORY & TITLE ═══
-  checks.push({section: 'B', step: 'B1', label: isES ? 'Categoría principal' : 'Primary category',
+  checks.push({section: 'B', step: 'B1', label: 'Primary category',
     ok: !!(biz.categoryName),
-    value: biz.categoryName || (isES ? 'NO CONFIGURADA' : 'NOT SET'),
-    action: biz.categoryName ? (isES ? 'Verificar vs competidores' : 'Verify vs competitors') : (isES ? 'Configurar categoría principal — factor #1 de ranking' : 'Set primary category — #1 ranking factor'),
+    value: biz.categoryName || ('NOT SET'),
+    action: biz.categoryName ? ('Verify vs competitors') : ('Set primary category — #1 ranking factor'),
   });
 
-  checks.push({section: 'B', step: 'B2', label: isES ? 'Categorías secundarias (mín 3)' : 'Secondary categories (min 3)',
+  checks.push({section: 'B', step: 'B2', label: 'Secondary categories (min 3)',
     ok: cats.length >= 4,
-    value: cats.length <= 1 ? (isES ? 'NINGUNA' : 'NONE') : (cats.length - 1) + (isES ? ' secundarias' : ' secondary'),
-    action: cats.length >= 4 ? cats.join(', ') : (isES ? 'Agregar 3-5 categorías secundarias. Actuales: ' + (cats.join(', ') || 'ninguna') : 'Add 3-5 secondary categories. Current: ' + (cats.join(', ') || 'none')),
+    value: cats.length <= 1 ? ('NONE') : (cats.length - 1) + (' secondary'),
+    action: cats.length >= 4 ? cats.join(', ') : 'Add 3-5 secondary categories. Current: ' + (cats.join(', ') || 'none'),
   });
 
-  // Check if category keyword + barrio is in the title
+  // Check if category keyword is in the title
   var titleLower = (biz.title || '').toLowerCase();
   var catLower = (biz.categoryName || '').toLowerCase();
-  var barrio = (biz._barrio || '').toLowerCase();
   var hasCatInTitle = catLower && titleLower.includes(catLower);
-  var hasBarrioInTitle = barrio && titleLower.includes(barrio);
-  var titleStatus = '';
-  if (hasCatInTitle && hasBarrioInTitle) titleStatus = isES ? 'Categoría + barrio en título ✓' : 'Category + neighborhood in title ✓';
-  else if (hasCatInTitle) titleStatus = isES ? 'Categoría en título ✓, falta barrio' : 'Category in title ✓, missing neighborhood';
-  else if (hasBarrioInTitle) titleStatus = isES ? 'Barrio en título ✓, falta categoría' : 'Neighborhood in title ✓, missing category';
-  else titleStatus = isES ? 'Ni categoría ni barrio en título' : 'Neither category nor neighborhood in title';
+  var titleStatus = hasCatInTitle ? 'Category in title ✓' : 'Category not in title';
 
-  checks.push({section: 'B', step: 'B3', label: isES ? 'Keywords en el título del negocio' : 'Keywords in business title',
+  checks.push({section: 'B', step: 'B3', label: 'Category keyword in business title',
     ok: hasCatInTitle,
     value: titleStatus,
-    action: hasCatInTitle ? '' : (isES ? 'Considerar agregar categoría y barrio al título (ej: "Plomero Palermo")' : 'Consider adding category and neighborhood to title (e.g. "Plumber Palermo")'),
+    action: hasCatInTitle ? '' : 'Consider adding category to title (e.g. "Acme Plumbing Services")',
   });
 
   // ═══ SECTION C: REVIEWS ═══
-  checks.push({section: 'C', step: 'C1', label: isES ? 'Cantidad de reseñas' : 'Number of reviews',
+  checks.push({section: 'C', step: 'C1', label: 'Number of reviews',
     ok: reviews >= 20,
-    value: reviews + (isES ? ' reseñas' : ' reviews'),
-    action: reviews >= 20 ? '' : (isES ? 'Necesita más reseñas — configurar sistema de solicitud automática' : 'Needs more reviews — set up automatic review request system'),
+    value: reviews + (' reviews'),
+    action: reviews >= 20 ? '' : ('Needs more reviews — set up automatic review request system'),
   });
 
-  checks.push({section: 'C', step: 'C2', label: isES ? 'Calificación general' : 'Overall rating',
+  checks.push({section: 'C', step: 'C2', label: 'Overall rating',
     ok: (biz.totalScore || 0) >= 4.0,
     value: (biz.totalScore || 0) + ' ★',
-    action: (biz.totalScore || 0) >= 4.0 ? '' : (isES ? 'Calificación baja — implementar sistema de reseñas filtradas (solo 4-5 ★)' : 'Low rating — implement filtered review system (only 4-5 ★)'),
+    action: (biz.totalScore || 0) >= 4.0 ? '' : ('Low rating — implement filtered review system (only 4-5 ★)'),
   });
 
   // ═══ SECTION D: WEBSITE ═══
-  checks.push({section: 'D', step: 'D', label: isES ? 'Sitio web' : 'Website',
+  checks.push({section: 'D', step: 'D', label: 'Website',
     ok: hasWebsite,
-    value: hasWebsite ? biz.website : (isES ? 'SIN SITIO WEB' : 'NO WEBSITE'),
+    value: hasWebsite ? biz.website : ('NO WEBSITE'),
     action: hasWebsite ?
-      (isES ? 'Verificar: categoría en H1, horarios visibles, dirección visible, mismo teléfono' : 'Verify: category in H1, hours visible, address visible, same phone number') :
-      (isES ? '⚡ OPORTUNIDAD: Necesita sitio web — agregar categoría en H1, horarios, dirección, teléfono' : '⚡ OPPORTUNITY: Needs website — add category in H1, hours, address, phone'),
+      ('Verify: category in H1, hours visible, address visible, same phone number') :
+      ('⚡ OPPORTUNITY: Needs website — add category in H1, hours, address, phone'),
   });
 
   // ═══ VISIBILITY ═══
-  checks.push({section: 'V', step: 'V', label: isES ? 'Visibilidad en búsquedas' : 'Search visibility',
+  checks.push({section: 'V', step: 'V', label: 'Search visibility',
     ok: vis > results.length * 0.5,
     value: vis + '/' + results.length + ' (' + Math.round(vis/results.length*100) + '%)',
-    action: vis <= results.length * 0.5 ? (isES ? 'Invisible en la mayoría de búsquedas — necesita optimización completa' : 'Invisible in most searches — needs full optimization') : '',
+    action: vis <= results.length * 0.5 ? ('Invisible in most searches — needs full optimization') : '',
   });
 
   return checks;
 }
 
 function renderAdvChecklist(checks) {
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
   var sectionNames = {
-    'A': isES ? 'A — DATOS BÁSICOS DEL PERFIL' : 'A — PROFILE BASICS',
-    'B': isES ? 'B — CATEGORÍA Y TÍTULO' : 'B — CATEGORY & TITLE',
-    'C': isES ? 'C — RESEÑAS' : 'C — REVIEWS',
-    'D': isES ? 'D — SITIO WEB' : 'D — WEBSITE',
-    'V': isES ? 'VISIBILIDAD' : 'VISIBILITY',
+    'A': 'A — PROFILE BASICS',
+    'B': 'B — CATEGORY & TITLE',
+    'C': 'C — REVIEWS',
+    'D': 'D — WEBSITE',
+    'V': 'VISIBILITY',
   };
 
   var html = '';
@@ -2091,8 +2019,6 @@ function renderAdvChecklist(checks) {
 
 function renderAdvVisibility(audit) {
   var results = audit.results;
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
   var sorted = results.slice().sort(function(a,b) {
     if (a.found !== b.found) return a.found ? 1 : -1;
     return a.keyword.localeCompare(b.keyword);
@@ -2128,29 +2054,27 @@ function renderAdvVisibility(audit) {
 function renderComparison(audit) {
   var biz = audit.biz;
   var comp = audit.topCompetitor;
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
 
   if (!comp) {
-    document.getElementById('pane-posts').innerHTML = '<p style="color:#999;">' + (isES ? 'No se encontró competidor para comparar' : 'No competitor found to compare') + '</p>';
+    document.getElementById('pane-posts').innerHTML = '<p style="color:#999;">' + ('No competitor found to compare') + '</p>';
     document.getElementById('pane-posts').classList.remove('hidden');
     return;
   }
 
   var rows = [
-    {label: isES ? 'Nombre' : 'Name', you: biz.title || '', them: comp.title || ''},
-    {label: isES ? 'Calificación' : 'Rating', you: (biz.totalScore || 0) + ' ★', them: (comp.totalScore || 0) + ' ★', youWins: (biz.totalScore||0) >= (comp.totalScore||0)},
-    {label: isES ? 'Reseñas' : 'Reviews', you: biz.reviewsCount || 0, them: comp.reviewsCount || 0, youWins: (biz.reviewsCount||0) >= (comp.reviewsCount||0)},
-    {label: isES ? 'Fotos' : 'Photos', you: biz.imageCount || biz.imagesCount || 0, them: comp.imageCount || comp.imagesCount || 0, youWins: (biz.imageCount||biz.imagesCount||0) >= (comp.imageCount||comp.imagesCount||0)},
-    {label: isES ? 'Categorías' : 'Categories', you: (biz.categories||[]).length, them: (comp.categories||[]).length, youWins: (biz.categories||[]).length >= (comp.categories||[]).length},
-    {label: isES ? 'Descripción' : 'Description', you: biz.description ? '✓' : '✗', them: comp.description ? '✓' : '✗', youWins: !!(biz.description)},
-    {label: isES ? 'Sitio web' : 'Website', you: biz.website ? '✓' : '✗', them: comp.website ? '✓' : '✗', youWins: !!(biz.website)},
-    {label: isES ? 'Horarios' : 'Hours', you: (biz.openingHours&&biz.openingHours.length) ? '✓' : '✗', them: (comp.openingHours&&comp.openingHours.length) ? '✓' : '✗', youWins: !!(biz.openingHours&&biz.openingHours.length)},
-    {label: isES ? 'Teléfono' : 'Phone', you: biz.phone ? '✓' : '✗', them: comp.phone ? '✓' : '✗', youWins: !!(biz.phone)},
+    {label: 'Name', you: biz.title || '', them: comp.title || ''},
+    {label: 'Rating', you: (biz.totalScore || 0) + ' ★', them: (comp.totalScore || 0) + ' ★', youWins: (biz.totalScore||0) >= (comp.totalScore||0)},
+    {label: 'Reviews', you: biz.reviewsCount || 0, them: comp.reviewsCount || 0, youWins: (biz.reviewsCount||0) >= (comp.reviewsCount||0)},
+    {label: 'Photos', you: biz.imageCount || biz.imagesCount || 0, them: comp.imageCount || comp.imagesCount || 0, youWins: (biz.imageCount||biz.imagesCount||0) >= (comp.imageCount||comp.imagesCount||0)},
+    {label: 'Categories', you: (biz.categories||[]).length, them: (comp.categories||[]).length, youWins: (biz.categories||[]).length >= (comp.categories||[]).length},
+    {label: 'Description', you: biz.description ? '✓' : '✗', them: comp.description ? '✓' : '✗', youWins: !!(biz.description)},
+    {label: 'Website', you: biz.website ? '✓' : '✗', them: comp.website ? '✓' : '✗', youWins: !!(biz.website)},
+    {label: 'Hours', you: (biz.openingHours&&biz.openingHours.length) ? '✓' : '✗', them: (comp.openingHours&&comp.openingHours.length) ? '✓' : '✗', youWins: !!(biz.openingHours&&biz.openingHours.length)},
+    {label: 'Phone', you: biz.phone ? '✓' : '✗', them: comp.phone ? '✓' : '✗', youWins: !!(biz.phone)},
   ];
 
   var html = '<div style="margin-bottom:12px;font-size:14px;font-weight:600;">' +
-    (isES ? 'Tu negocio vs #1 en el área' : 'Your business vs #1 in the area') + '</div>';
+    ('Your business vs #1 in the area') + '</div>';
 
   html += '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;font-size:13px;">';
   // Header
@@ -2179,7 +2103,7 @@ function renderComparison(audit) {
 
   if (missingCats.length > 0) {
     html += '<div style="margin-top:16px;padding:12px;background:#fef2f2;border-radius:8px;">';
-    html += '<div style="font-weight:600;margin-bottom:6px;">' + (isES ? 'Categorías que #1 tiene y usted NO:' : 'Categories #1 has that you DON\'T:') + '</div>';
+    html += '<div style="font-weight:600;margin-bottom:6px;">Categories #1 has that you DON\'T:</div>';
     for (var m = 0; m < missingCats.length; m++) {
       html += '<div style="font-size:13px;padding:2px 0;">→ ' + missingCats[m] + '</div>';
     }
@@ -2188,7 +2112,7 @@ function renderComparison(audit) {
 
   if (theirCats.length > 0) {
     html += '<div style="margin-top:8px;padding:12px;background:#f0fdf4;border-radius:8px;">';
-    html += '<div style="font-weight:600;margin-bottom:6px;">' + (isES ? 'Todas las categorías de #1:' : 'All categories of #1:') + '</div>';
+    html += '<div style="font-weight:600;margin-bottom:6px;">' + ('All categories of #1:') + '</div>';
     html += '<div style="font-size:13px;">' + theirCats.join(', ') + '</div>';
     html += '</div>';
   }
@@ -2203,19 +2127,17 @@ function renderComparison(audit) {
 function renderCompetitorAnalysis(audit) {
   var biz = audit.biz;
   var comps = audit.topCompetitors || [];
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
   var yourCats = biz.categories || [];
   var yourCatSet = {};
   yourCats.forEach(function(c){yourCatSet[c]=true;});
 
   var html = '<div style="font-weight:700;font-size:16px;margin-bottom:12px;">' +
-    (isES ? 'Análisis de Competidores — Top ' + comps.length + ' en el área' : 'Competitor Analysis — Top ' + comps.length + ' in the area') + '</div>';
+    'Competitor Analysis — Top ' + comps.length + ' in the area' + '</div>';
 
   // Table of competitors
   html += '<div style="overflow-x:auto;">';
   html += '<table style="width:100%;border-collapse:collapse;font-size:13px;">';
-  html += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">#</th><th style="padding:8px;text-align:left;">' + (isES ? 'Nombre' : 'Name') + '</th><th style="padding:8px;">' + (isES ? 'Cat. Principal' : 'Primary Cat.') + '</th><th style="padding:8px;">' + (isES ? 'Secundarias' : 'Secondary') + '</th><th style="padding:8px;">★</th><th style="padding:8px;">' + (isES ? 'Reseñas' : 'Reviews') + '</th><th style="padding:8px;">' + (isES ? 'Fotos' : 'Photos') + '</th><th style="padding:8px;">Web</th></tr>';
+  html += '<tr style="background:#f3f4f6;"><th style="padding:8px;text-align:left;">#</th><th style="padding:8px;text-align:left;">' + ('Name') + '</th><th style="padding:8px;">' + ('Primary Cat.') + '</th><th style="padding:8px;">' + ('Secondary') + '</th><th style="padding:8px;">★</th><th style="padding:8px;">' + ('Reviews') + '</th><th style="padding:8px;">' + ('Photos') + '</th><th style="padding:8px;">Web</th></tr>';
 
   var allCatPool = {};
   var primaryPool = {};
@@ -2253,10 +2175,10 @@ function renderCompetitorAnalysis(audit) {
   // Primary category summary
   var primaryList = Object.keys(primaryPool).sort(function(a,b){return primaryPool[b]-primaryPool[a];});
   html += '<div style="margin-top:16px;padding:12px;background:#f0f9ff;border-radius:8px;border-left:4px solid #3b82f6;">';
-  html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Categorías principales usadas por competidores:' : 'Primary categories used by competitors:') + '</div>';
+  html += '<div style="font-weight:700;margin-bottom:6px;">' + ('Primary categories used by competitors:') + '</div>';
   primaryList.forEach(function(cat) {
     var isYours = yourCatSet[cat];
-    html += '<div style="font-size:13px;padding:2px 0;">' + cat + ' — ' + primaryPool[cat] + (isES ? ' competidores' : ' competitors') + (isYours ? ' ✓' : '') + '</div>';
+    html += '<div style="font-size:13px;padding:2px 0;">' + cat + ' — ' + primaryPool[cat] + (' competitors') + (isYours ? ' ✓' : '') + '</div>';
   });
   html += '</div>';
 
@@ -2266,33 +2188,33 @@ function renderCompetitorAnalysis(audit) {
 
   if (missingCats.length > 0) {
     html += '<div style="margin-top:12px;padding:12px;background:#fef2f2;border-radius:8px;border-left:4px solid #dc2626;">';
-    html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:') + '</div>';
+    html += '<div style="font-weight:700;margin-bottom:6px;">Categories competitors use that you DON\'T have:</div>';
     missingCats.forEach(function(cat) {
-      html += '<div style="font-size:13px;padding:2px 0;">→ ' + cat + ' (' + allCatPool[cat] + (isES ? ' competidores' : ' competitors') + ')</div>';
+      html += '<div style="font-size:13px;padding:2px 0;">→ ' + cat + ' (' + allCatPool[cat] + (' competitors') + ')</div>';
     });
     html += '</div>';
   }
 
   // Your current categories
   html += '<div style="margin-top:12px;padding:12px;background:#f0fdf4;border-radius:8px;border-left:4px solid #16a34a;">';
-  html += '<div style="font-weight:700;margin-bottom:6px;">' + (isES ? 'Sus categorías actuales:' : 'Your current categories:') + '</div>';
+  html += '<div style="font-weight:700;margin-bottom:6px;">' + ('Your current categories:') + '</div>';
   if (yourCats.length > 0) {
     yourCats.forEach(function(cat,i) {
-      html += '<div style="font-size:13px;padding:2px 0;">' + (i===0 ? '★ ' : '  ') + cat + (i===0 ? (isES ? ' (principal)' : ' (primary)') : '') + '</div>';
+      html += '<div style="font-size:13px;padding:2px 0;">' + (i===0 ? '★ ' : '  ') + cat + (i===0 ? (' (primary)') : '') + '</div>';
     });
   } else {
-    html += '<div style="font-size:13px;color:#dc2626;">' + (isES ? 'Sin categorías configuradas' : 'No categories set') + '</div>';
+    html += '<div style="font-size:13px;color:#dc2626;">' + ('No categories set') + '</div>';
   }
   html += '</div>';
 
   // Recommendation
   html += '<div style="margin-top:12px;padding:12px;background:#fff8e1;border-radius:8px;border-left:4px solid #f59e0b;">';
-  html += '<div style="font-weight:700;margin-bottom:6px;">💡 ' + (isES ? 'Recomendación:' : 'Recommendation:') + '</div>';
+  html += '<div style="font-weight:700;margin-bottom:6px;">💡 ' + ('Recommendation:') + '</div>';
   var recPrimary = primaryList[0] || biz.categoryName || '';
   var recSecondary = missingCats.slice(0, 5);
-  html += '<div style="font-size:13px;">' + (isES ? 'Categoría principal recomendada: ' : 'Recommended primary category: ') + '<strong>' + recPrimary + '</strong></div>';
+  html += '<div style="font-size:13px;">' + ('Recommended primary category: ') + '<strong>' + recPrimary + '</strong></div>';
   if (recSecondary.length > 0) {
-    html += '<div style="font-size:13px;margin-top:4px;">' + (isES ? 'Secundarias sugeridas:' : 'Suggested secondary:') + '</div>';
+    html += '<div style="font-size:13px;margin-top:4px;">' + ('Suggested secondary:') + '</div>';
     recSecondary.forEach(function(cat) {
       html += '<div style="font-size:13px;padding:1px 0;">  → ' + cat + '</div>';
     });
@@ -2300,7 +2222,7 @@ function renderCompetitorAnalysis(audit) {
   // Check if recommended primary is in business name
   var titleLower = (biz.title || '').toLowerCase();
   var recInTitle = recPrimary && titleLower.includes(recPrimary.toLowerCase());
-  html += '<div style="font-size:13px;margin-top:6px;">' + (isES ? 'Keyword en título: ' : 'Keyword in title: ') + (recInTitle ? '✓ ' + (isES ? 'Sí' : 'Yes') : '✗ ' + (isES ? 'No — considerar agregar' : 'No — consider adding')) + '</div>';
+  html += '<div style="font-size:13px;margin-top:6px;">' + ('Keyword in title: ') + (recInTitle ? '✓ ' + ('Yes') : '✗ ' + ('No — consider adding')) + '</div>';
   html += '</div>';
 
   document.getElementById('pane-posts').innerHTML = html;
@@ -2317,8 +2239,6 @@ function dlAdvancedExcel() {
 
   var biz = audit.biz;
   var results = audit.results;
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
   var vis = results.filter(function(r){return r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
   var cats = biz.categories || [];
@@ -2329,30 +2249,29 @@ function dlAdvancedExcel() {
   var data = [];
 
   // Title
-  data.push([isES ? 'AUDITORÍA AVANZADA GMB' : 'ADVANCED GMB AUDIT']);
+  data.push(['ADVANCED GMB AUDIT']);
   data.push(['']);
   data.push(['═══════════════════════════════════════════════════════']);
 
   // Business info
-  data.push([isES ? 'Negocio' : 'Business', biz.title || '']);
-  data.push([isES ? 'Dirección' : 'Address', biz.address || '']);
-  data.push([isES ? 'Teléfono' : 'Phone', biz.phone || '']);
-  data.push([isES ? 'Sitio web' : 'Website', biz.website || (isES ? 'SIN SITIO WEB' : 'NO WEBSITE')]);
-  data.push([isES ? 'Categoría principal' : 'Primary category', biz.categoryName || '']);
-  data.push([isES ? 'Categorías secundarias' : 'Secondary categories', cats.length > 1 ? cats.slice(1).join(', ') : (isES ? 'NINGUNA' : 'NONE')]);
-  data.push([isES ? 'Barrio' : 'Neighborhood', audit.barrio || '']);
-  data.push([isES ? 'Calificación' : 'Rating', (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + (isES ? ' reseñas)' : ' reviews)')]);
-  data.push([isES ? 'Fotos' : 'Photos', biz.imageCount || biz.imagesCount || 0]);
-  data.push([isES ? 'Perfil Google Maps' : 'Google Maps Profile', biz.url || '']);
+  data.push(['Business', biz.title || '']);
+  data.push(['Address', biz.address || '']);
+  data.push(['Phone', biz.phone || '']);
+  data.push(['Website', biz.website || ('NO WEBSITE')]);
+  data.push(['Primary category', biz.categoryName || '']);
+  data.push(['Secondary categories', cats.length > 1 ? cats.slice(1).join(', ') : ('NONE')]);
+  data.push(['Rating', (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + (' reviews)')]);
+  data.push(['Photos', biz.imageCount || biz.imagesCount || 0]);
+  data.push(['Google Maps Profile', biz.url || '']);
   data.push(['']);
-  data.push([isES ? 'VISIBILIDAD' : 'VISIBILITY', visPct + '%', '', vis + '/' + results.length]);
+  data.push(['VISIBILITY', visPct + '%', '', vis + '/' + results.length]);
   data.push(['']);
 
   // 20-step checklist
   data.push(['═══════════════════════════════════════════════════════']);
-  data.push([isES ? 'CHECKLIST DE OPTIMIZACIÓN GMB' : 'GMB OPTIMIZATION CHECKLIST']);
+  data.push(['GMB OPTIMIZATION CHECKLIST']);
   data.push(['']);
-  data.push([isES ? 'PASO' : 'STEP', isES ? 'ITEM' : 'ITEM', isES ? 'ESTADO' : 'STATUS', isES ? 'ACCIÓN REQUERIDA' : 'ACTION NEEDED']);
+  data.push(['STEP', 'ITEM', 'STATUS', 'ACTION NEEDED']);
 
   for (var i = 0; i < checks.length; i++) {
     var c = checks[i];
@@ -2368,14 +2287,14 @@ function dlAdvancedExcel() {
 
   // Visibility table
   data.push(['═══════════════════════════════════════════════════════']);
-  data.push([isES ? 'RESULTADOS DE VISIBILIDAD' : 'VISIBILITY RESULTS']);
+  data.push(['VISIBILITY RESULTS']);
   data.push(['']);
-  data.push([isES ? 'BÚSQUEDA' : 'SEARCH', isES ? 'VISIBLE?' : 'VISIBLE?', 'POS.', isES ? 'QUIÉN APARECE' : 'WHO SHOWS UP', '', isES ? 'CALIF.' : 'RATING', isES ? 'RESEÑAS' : 'REVIEWS']);
+  data.push(['SEARCH', 'VISIBLE?', 'POS.', 'WHO SHOWS UP', '', 'RATING', 'REVIEWS']);
 
   for (var j = 0; j < results.length; j++) {
     var r = results[j];
     var c1 = r.topCompetitors[0] || {};
-    data.push([r.keyword, r.found ? (isES ? 'SÍ' : 'YES') : 'NO', r.found ? '#' + r.position : '—', c1.name || '', '', c1.rating || '', c1.reviews || '']);
+    data.push([r.keyword, r.found ? ('YES') : 'NO', r.found ? '#' + r.position : '—', c1.name || '', '', c1.rating || '', c1.reviews || '']);
     var c2 = r.topCompetitors[1] || {};
     if (!r.found && c2.name) {
       data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
@@ -2385,7 +2304,7 @@ function dlAdvancedExcel() {
   // Competitor categories
   data.push(['']);
   data.push(['═══════════════════════════════════════════════════════']);
-  data.push([isES ? 'CATEGORÍAS DE COMPETIDORES' : 'COMPETITOR CATEGORIES']);
+  data.push(['COMPETITOR CATEGORIES']);
   data.push(['']);
 
   var compCatCount = {};
@@ -2405,12 +2324,12 @@ function dlAdvancedExcel() {
   var missingCats = compCatList.filter(function(c){return !bizCatSet[c];});
 
   if (missingCats.length > 0) {
-    data.push([isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:']);
+    data.push(['Categories competitors use that you DON\'T have:']);
     for (var mi = 0; mi < Math.min(10, missingCats.length); mi++) {
-      data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (isES ? ' competidores' : ' competitors')]);
+      data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (' competitors')]);
     }
   } else {
-    data.push([isES ? 'No se encontraron categorías de competidores' : 'No competitor categories found']);
+    data.push(['No competitor categories found']);
   }
 
   // ═══ #1 COMPETITOR COMPARISON ═══
@@ -2418,18 +2337,18 @@ function dlAdvancedExcel() {
   if (comp) {
     data.push(['']);
     data.push(['═══════════════════════════════════════════════════════']);
-    data.push([isES ? 'COMPARACIÓN CON #1 EN EL ÁREA' : 'COMPARISON WITH #1 IN THE AREA']);
+    data.push(['COMPARISON WITH #1 IN THE AREA']);
     data.push(['']);
-    data.push(['', isES ? 'USTED' : 'YOU', '#1 ' + (comp.title || '').slice(0,30)]);
-    data.push([isES ? 'Nombre' : 'Name', biz.title || '', comp.title || '']);
-    data.push([isES ? 'Calificación' : 'Rating', (biz.totalScore||0) + ' ★', (comp.totalScore||0) + ' ★']);
-    data.push([isES ? 'Reseñas' : 'Reviews', biz.reviewsCount||0, comp.reviewsCount||0]);
-    data.push([isES ? 'Fotos' : 'Photos', biz.imageCount||biz.imagesCount||0, comp.imageCount||comp.imagesCount||0]);
-    data.push([isES ? 'Categorías' : 'Categories', cats.length, (comp.categories||[]).length]);
-    data.push([isES ? 'Descripción' : 'Description', biz.description ? (isES ? 'Sí' : 'Yes') : 'No', comp.description ? (isES ? 'Sí' : 'Yes') : 'No']);
-    data.push([isES ? 'Sitio web' : 'Website', biz.website ? (isES ? 'Sí' : 'Yes') : 'No', comp.website ? (isES ? 'Sí' : 'Yes') : 'No']);
-    data.push([isES ? 'Horarios' : 'Hours', (biz.openingHours&&biz.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No', (comp.openingHours&&comp.openingHours.length) ? (isES ? 'Sí' : 'Yes') : 'No']);
-    data.push([isES ? 'Teléfono' : 'Phone', biz.phone||'No', comp.phone||'No']);
+    data.push(['', 'YOU', '#1 ' + (comp.title || '').slice(0,30)]);
+    data.push(['Name', biz.title || '', comp.title || '']);
+    data.push(['Rating', (biz.totalScore||0) + ' ★', (comp.totalScore||0) + ' ★']);
+    data.push(['Reviews', biz.reviewsCount||0, comp.reviewsCount||0]);
+    data.push(['Photos', biz.imageCount||biz.imagesCount||0, comp.imageCount||comp.imagesCount||0]);
+    data.push(['Categories', cats.length, (comp.categories||[]).length]);
+    data.push(['Description', biz.description ? ('Yes') : 'No', comp.description ? ('Yes') : 'No']);
+    data.push(['Website', biz.website ? ('Yes') : 'No', comp.website ? ('Yes') : 'No']);
+    data.push(['Hours', (biz.openingHours&&biz.openingHours.length) ? ('Yes') : 'No', (comp.openingHours&&comp.openingHours.length) ? ('Yes') : 'No']);
+    data.push(['Phone', biz.phone||'No', comp.phone||'No']);
   }
 
   // ═══ FULL COMPETITOR TABLE ═══
@@ -2437,9 +2356,9 @@ function dlAdvancedExcel() {
   if (allComps.length > 0) {
     data.push(['']);
     data.push(['═══════════════════════════════════════════════════════']);
-    data.push([isES ? 'TOP COMPETIDORES EN EL ÁREA' : 'TOP COMPETITORS IN THE AREA']);
+    data.push(['TOP COMPETITORS IN THE AREA']);
     data.push(['']);
-    data.push(['#', isES ? 'Nombre' : 'Name', isES ? 'Cat. Principal' : 'Primary Cat.', isES ? 'Categorías Secundarias' : 'Secondary Categories', '★', isES ? 'Reseñas' : 'Reviews', isES ? 'Fotos' : 'Photos', isES ? 'Sitio web' : 'Website']);
+    data.push(['#', 'Name', 'Primary Cat.', 'Secondary Categories', '★', 'Reviews', 'Photos', 'Website']);
 
     var allCatPoolExcel = {};
     var primaryPoolExcel = {};
@@ -2455,31 +2374,31 @@ function dlAdvancedExcel() {
 
       var ccWebsite = cc.website || '';
       var ccPhotos = cc.imageCount || cc.imagesCount || 0;
-      data.push([ci+1, cc.title || '', ccPrimary, ccSecondary, cc.totalScore || '', cc.reviewsCount || '', ccPhotos, ccWebsite ? (isES ? 'Sí' : 'Yes') : 'No']);
+      data.push([ci+1, cc.title || '', ccPrimary, ccSecondary, cc.totalScore || '', cc.reviewsCount || '', ccPhotos, ccWebsite ? ('Yes') : 'No']);
     }
 
     // Category pool + recommendations
     data.push(['']);
-    data.push([isES ? 'CATEGORÍAS DISPONIBLES EN EL ÁREA' : 'AVAILABLE CATEGORIES IN THE AREA']);
+    data.push(['AVAILABLE CATEGORIES IN THE AREA']);
     var allCatListExcel = Object.keys(allCatPoolExcel).sort(function(a,b){return allCatPoolExcel[b]-allCatPoolExcel[a];});
     allCatListExcel.forEach(function(cat) {
-      var yours = yourCatSet[cat] ? ' ✓ ' + (isES ? '(usted la tiene)' : '(you have it)') : '';
-      data.push([cat, allCatPoolExcel[cat] + (isES ? ' competidores' : ' competitors'), yours]);
+      var yours = yourCatSet[cat] ? ' ✓ ' + ('(you have it)') : '';
+      data.push([cat, allCatPoolExcel[cat] + (' competitors'), yours]);
     });
 
     // Recommendation
     data.push(['']);
-    data.push([isES ? 'RECOMENDACIÓN' : 'RECOMMENDATION']);
+    data.push(['RECOMMENDATION']);
     var recPrimary = Object.keys(primaryPoolExcel).sort(function(a,b){return primaryPoolExcel[b]-primaryPoolExcel[a];})[0] || biz.categoryName || '';
     var yourCatSet2 = {};
     cats.forEach(function(c){yourCatSet2[c]=true;});
     var recSecondary = allCatListExcel.filter(function(c){return !yourCatSet2[c];}).slice(0,5);
 
-    data.push([isES ? 'Categoría principal recomendada:' : 'Recommended primary:', recPrimary]);
-    data.push([isES ? 'Secundarias sugeridas:' : 'Suggested secondary:', recSecondary.join(', ')]);
+    data.push(['Recommended primary:', recPrimary]);
+    data.push(['Suggested secondary:', recSecondary.join(', ')]);
     var titleLower2 = (biz.title || '').toLowerCase();
     var recInTitle = recPrimary && titleLower2.includes(recPrimary.toLowerCase());
-    data.push([isES ? 'Keyword en título:' : 'Keyword in title:', recInTitle ? (isES ? 'Sí ✓' : 'Yes ✓') : (isES ? 'No ✗ — considerar agregar' : 'No ✗ — consider adding')]);
+    data.push(['Keyword in title:', recInTitle ? ('Yes ✓') : ('No ✗ — consider adding')]);
   }
 
   var ws = XLSX.utils.aoa_to_sheet(data);
@@ -2501,7 +2420,6 @@ async function generatePDF() {
   var comp = audit.topCompetitor;
   var allComps = audit.topCompetitors || [];
   var rankKeyword = audit.rankKeyword || '';
-  var barrio = audit.barrio || '';
   var cats = biz.categories || [];
   var vis = results.filter(function(r){return r.found;}).length;
   var visPct = Math.round(vis / results.length * 100);
@@ -2541,7 +2459,7 @@ async function generatePDF() {
   h += '<span style="color:#1a56db;font-weight:800;letter-spacing:4px;font-size:11px;">VELOCITY WEB</span>';
   h += '<span style="color:#888;font-size:11px;">Online Presence Analysis</span></div>';
   h += '<h1 style="font-size:26px;font-weight:800;margin:0 0 2px;">'+(biz.title||'')+'</h1>';
-  h += '<p style="color:#888;font-size:12px;margin:0 0 16px;">'+barrio+' &bull; '+(biz.categoryName||'')+' &bull; '+today+'</p>';
+  h += '<p style="color:#888;font-size:12px;margin:0 0 16px;">'+(biz.categoryName||'')+' &bull; '+today+'</p>';
   h += '<div style="display:flex;gap:12px;margin-bottom:16px;">';
   h += '<div style="flex:1;border:2px solid '+visColor+';border-radius:6px;padding:14px;text-align:center;">';
   h += '<div style="font-size:9px;letter-spacing:2px;color:#555;font-weight:700;">GOOGLE VISIBILITY</div>';
@@ -2635,21 +2553,8 @@ function dlBulkAuditExcel() {
   var audits = window._allAudits;
   if (!audits || !audits.length) return;
 
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
 
-  var L = isES ? {
-    title: 'INFORME DE VISIBILIDAD', business: 'Negocio', address: 'Dirección',
-    phone: 'Teléfono', website: 'Sitio web', category: 'Categoría',
-    rating: 'Calificación', photos: 'Fotos', profile: 'Perfil Google Maps',
-    visScore: 'VISIBILIDAD', search: 'BÚSQUEDA', visible: 'VISIBLE?',
-    position: 'POS.', whoInstead: 'QUIÉN APARECE', theirRating: 'CALIF.',
-    theirReviews: 'RESEÑAS', yes: 'SÍ', no: 'NO', checklist: 'CHECKLIST',
-    needsMore: 'NECESITA MÁS', askCustomers: 'PEDIR A CLIENTES',
-    addMore: 'AGREGAR MÁS', writeOne: 'ESCRIBIR', needsWebsite: 'NECESITA WEB',
-    ok: 'OK', missing: 'FALTA', empty: 'VACÍO', reviews: 'Reseñas',
-    noWebsite: 'SIN WEB', barrio: 'Barrio',
-  } : {
+  var L = {
     title: 'VISIBILITY REPORT', business: 'Business', address: 'Address',
     phone: 'Phone', website: 'Website', category: 'Category',
     rating: 'Rating', photos: 'Photos', profile: 'Google Maps',
@@ -2659,26 +2564,25 @@ function dlBulkAuditExcel() {
     needsMore: 'NEEDS MORE', askCustomers: 'ASK CUSTOMERS',
     addMore: 'ADD MORE', writeOne: 'WRITE ONE', needsWebsite: 'NEEDS WEBSITE',
     ok: 'OK', missing: 'MISSING', empty: 'EMPTY', reviews: 'Reviews',
-    noWebsite: 'NO WEBSITE', barrio: 'Neighborhood',
+    noWebsite: 'NO WEBSITE',
   };
 
   var wb = XLSX.utils.book_new();
 
   // ═══ SHEET 1: MASTER LIST for Leonor ═══
   var summary = [];
-  summary.push([isES ? 'LISTA DE LEADS' : 'LEAD LIST']);
+  summary.push(['LEAD LIST']);
   summary.push(['']);
   summary.push([
     '#',
-    isES ? 'Nombre' : 'Name',
-    isES ? 'Teléfono' : 'Phone',
-    isES ? 'Barrio' : 'Neighborhood',
-    isES ? 'Perfil' : 'Profile Score',
+    'Name',
+    'Phone',
+    'Profile Score',
     'Web',
-    isES ? 'Reseñas' : 'Reviews',
+    'Reviews',
     '★',
-    isES ? 'Fotos' : 'Photos',
-    isES ? 'Falta' : 'Missing',
+    'Photos',
+    'Missing',
   ]);
   for (var s = 0; s < audits.length; s++) {
     var sBiz = audits[s].biz;
@@ -2687,9 +2591,8 @@ function dlBulkAuditExcel() {
       s + 1,
       sBiz.title || '',
       sBiz.phone || '',
-      audits[s].barrio || '',
       sHealth.passed + '/' + sHealth.total,
-      sBiz.website ? (isES ? 'Sí' : 'Yes') : 'NO',
+      sBiz.website ? 'Yes' : 'NO',
       sBiz.reviewsCount || 0,
       sBiz.totalScore || 0,
       sBiz.imageCount || sBiz.imagesCount || 0,
@@ -2697,8 +2600,8 @@ function dlBulkAuditExcel() {
     ]);
   }
   var wsSummary = XLSX.utils.aoa_to_sheet(summary);
-  wsSummary['!cols'] = [{wch:4},{wch:35},{wch:18},{wch:16},{wch:8},{wch:6},{wch:8},{wch:5},{wch:7},{wch:50}];
-  XLSX.utils.book_append_sheet(wb, wsSummary, isES ? 'Resumen' : 'Summary');
+  wsSummary['!cols'] = [{wch:4},{wch:35},{wch:18},{wch:8},{wch:6},{wch:8},{wch:5},{wch:7},{wch:50}];
+  XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
 
   // ═══ SHEET 2: DETAILED REPORTS ═══
   var data = [];
@@ -2725,11 +2628,10 @@ function dlBulkAuditExcel() {
     // Show all categories
     var allCats = biz.categories || [];
     if (allCats.length > 1) {
-      data.push([isES ? 'Categorías secundarias' : 'Secondary categories', allCats.slice(1).join(', ')]);
+      data.push(['Secondary categories', allCats.slice(1).join(', ')]);
     } else {
-      data.push([isES ? 'Categorías secundarias' : 'Secondary categories', isES ? 'NINGUNA — agregar más' : 'NONE — add more']);
+      data.push(['Secondary categories', 'NONE — add more']);
     }
-    data.push([L.barrio, audit.barrio || '']);
     data.push([L.rating, (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' ' + L.reviews.toLowerCase() + ')']);
     data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
     data.push([L.profile, biz.url || '']);
@@ -2737,26 +2639,26 @@ function dlBulkAuditExcel() {
 
     // Profile health scorecard
     var health = quickProfileHealth(biz);
-    data.push([isES ? 'PERFIL' : 'PROFILE', health.passed + '/' + health.total, '', health.missing.length > 0 ? (isES ? 'Falta: ' : 'Missing: ') + health.missing.join(', ') : (isES ? 'Perfil completo ✓' : 'Complete profile ✓')]);
+    data.push(['PROFILE', health.passed + '/' + health.total, '', health.missing.length > 0 ? ('Missing: ') + health.missing.join(', ') : ('Complete profile ✓')]);
 
     // Quick checklist row
     var ck = health.checks;
     data.push([
-      isES ? 'Tel' : 'Phone', ck[0].ok ? '✓' : '✗',
-      isES ? 'Dir' : 'Addr', ck[1].ok ? '✓' : '✗',
-      isES ? 'Hrs' : 'Hours', ck[2].ok ? '✓' : '✗',
-      isES ? 'Desc' : 'Desc', ck[3].ok ? '✓' : '✗',
+      'Phone', ck[0].ok ? '✓' : '✗',
+      'Addr', ck[1].ok ? '✓' : '✗',
+      'Hours', ck[2].ok ? '✓' : '✗',
+      'Desc', ck[3].ok ? '✓' : '✗',
     ]);
     data.push([
-      isES ? 'Fotos' : 'Photos', ck[4].ok ? '✓ ' + (biz.imageCount||biz.imagesCount||0) : '✗ ' + (biz.imageCount||biz.imagesCount||0),
+      'Photos', ck[4].ok ? '✓ ' + (biz.imageCount||biz.imagesCount||0) : '✗ ' + (biz.imageCount||biz.imagesCount||0),
       'Logo', ck[5].ok ? '✓' : '✗',
-      isES ? 'Serv' : 'Serv', ck[6].ok ? '✓' : '✗',
-      isES ? 'Cats' : 'Cats', ck[7].ok ? '✓ ' + (biz.categories||[]).length : '✗ ' + (biz.categories||[]).length,
+      'Serv', ck[6].ok ? '✓' : '✗',
+      'Cats', ck[7].ok ? '✓ ' + (biz.categories||[]).length : '✗ ' + (biz.categories||[]).length,
     ]);
     data.push([
-      isES ? 'Reseñas' : 'Reviews', (biz.reviewsCount||0),
+      'Reviews', (biz.reviewsCount||0),
       '★', (biz.totalScore||0),
-      'Web', ck[10].ok ? '✓' : '✗ ' + (isES ? 'OPORTUNIDAD' : 'OPPORTUNITY'),
+      'Web', ck[10].ok ? '✓' : '✗ ' + ('OPPORTUNITY'),
     ]);
     data.push(['']);
 
@@ -2803,11 +2705,11 @@ function dlBulkAuditExcel() {
 
     if (missingCats.length > 0 || compCatList.length > 0) {
       data.push(['']);
-      data.push([isES ? 'CATEGORÍAS DE COMPETIDORES' : 'COMPETITOR CATEGORIES']);
+      data.push(['COMPETITOR CATEGORIES']);
       if (missingCats.length > 0) {
-        data.push([isES ? 'Categorías que competidores usan y usted NO tiene:' : 'Categories competitors use that you DON\'T have:']);
+        data.push(['Categories competitors use that you DON\'T have:']);
         for (var mi = 0; mi < Math.min(8, missingCats.length); mi++) {
-          data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (isES ? ' competidores la usan' : ' competitors use it')]);
+          data.push(['  → ' + missingCats[mi], compCatCount[missingCats[mi]] + (' competitors use it')]);
         }
       }
     }
@@ -2819,7 +2721,7 @@ function dlBulkAuditExcel() {
   var ws = XLSX.utils.aoa_to_sheet(data);
   ws['!cols'] = [{wch:32},{wch:12},{wch:8},{wch:45},{wch:2},{wch:8},{wch:10}];
 
-  XLSX.utils.book_append_sheet(wb, ws, isES ? 'Detalle' : 'Details');
+  XLSX.utils.book_append_sheet(wb, ws, 'Details');
   var dateStr = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, 'bulk-audit-' + dateStr + '.xlsx');
 }

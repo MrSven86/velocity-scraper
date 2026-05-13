@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
@@ -73,18 +74,6 @@
       <button class="mode-btn active" id="mode-all" onclick="setMode('all')" style="font-weight:700;">
         <span class="icon">⚡</span>Scrape All
       </button>
-      <button class="mode-btn" id="mode-gmaps" onclick="setMode('gmaps')">
-        <span class="icon">🗺️</span>Google Maps
-      </button>
-      <button class="mode-btn" id="mode-ig" onclick="setMode('ig')">
-        <span class="icon">📸</span>Instagram
-      </button>
-      <button class="mode-btn" id="mode-research" onclick="setMode('research')">
-        <span class="icon">🔍</span>Research
-      </button>
-      <button class="mode-btn" id="mode-fb" onclick="setMode('fb')">
-        <span class="icon">📘</span>Facebook
-      </button>
       <button class="mode-btn" id="mode-special" onclick="setMode('special')" style="background:#fff8e1;border-color:#f59e0b;">
         <span class="icon">🌍</span>Special Research
       </button>
@@ -127,65 +116,6 @@
           </select>
         </div>
       </div>
-    </div>
-
-    <div id="gmaps-fields" class="hidden">
-      <label>Google Maps URL or business name</label>
-      <input type="text" id="gmaps-query" placeholder="https://maps.google.com/... or La pelu Belgrano Buenos Aires" />
-      <div class="row">
-        <div>
-          <label>Max reviews</label>
-          <select id="maxReviews">
-            <option value="20">20</option>
-            <option value="50" selected>50</option>
-            <option value="100">100</option>
-            <option value="200">200</option>
-          </select>
-        </div>
-        <div>
-          <label>Max photos</label>
-          <select id="maxPhotos">
-            <option value="10">10</option>
-            <option value="20" selected>20</option>
-            <option value="50">50</option>
-            <option value="100">100</option>
-          </select>
-        </div>
-      </div>
-    </div>
-
-    <div id="ig-fields" class="hidden">
-      <div class="tip">Paste the Instagram profile URL. Example: https://www.instagram.com/lapelu.belgrano/</div>
-      <label>Instagram profile URL</label>
-      <input type="text" id="ig-query" placeholder="https://www.instagram.com/username/" />
-      <label>Max posts to scrape</label>
-      <select id="maxPosts">
-        <option value="12">12 posts</option>
-        <option value="24">24 posts</option>
-        <option value="50" selected>50 posts</option>
-        <option value="100">100 posts</option>
-      </select>
-    </div>
-
-    <div id="research-fields" class="hidden">
-      <div class="tip">Enter a business name and city. The scraper will Google it, find their website, Maps listing, Instagram, and pull all copy.</div>
-      <label>Business name</label>
-      <input type="text" id="research-name" placeholder="La pelu Belgrano" />
-      <label>City / Country</label>
-      <input type="text" id="research-city" placeholder="Buenos Aires, Argentina" />
-    </div>
-
-    <div id="fb-fields" class="hidden">
-      <div class="tip">Paste the Facebook page URL. Example: https://www.facebook.com/vamapintura/</div>
-      <label>Facebook page URL</label>
-      <input type="text" id="fb-query" placeholder="https://www.facebook.com/pagename/" />
-      <label>Max posts to scrape</label>
-      <select id="fb-maxPosts">
-        <option value="12">12 posts</option>
-        <option value="24">24 posts</option>
-        <option value="50" selected>50 posts</option>
-        <option value="100">100 posts</option>
-      </select>
     </div>
 
     <div id="special-fields" class="hidden">
@@ -308,7 +238,7 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','gmaps','ig','research','fb','special','audit','rank'].forEach(m => {
+  ['all','special','audit','rank'].forEach(m => {
     var fields = document.getElementById(m + '-fields');
     if (fields) fields.classList.toggle('hidden', m !== mode);
     var btn = document.getElementById('mode-' + m);
@@ -331,155 +261,6 @@ function setProgress(pct) {
   document.getElementById('progress-bar').style.width = pct + '%';
 }
 
-async function scrapeResearch(token) {
-  const name = document.getElementById('research-name').value.trim();
-  const city = document.getElementById('research-city').value.trim();
-  if (!name) throw new Error('Please enter a business name');
-
-  const query = city ? `${name} ${city}` : name;
-  setStatus('Searching Google for: ' + query, 'info');
-
-  // Run Google search scraper
-  const searches = [
-    query,
-    `${query} Instagram`,
-    `${query} sitio web`,
-  ];
-
-  const input = {
-    queries: searches.join('\n'),
-    resultsPerPage: 5,
-    maxPagesPerQuery: 1,
-    languageCode: 'es',
-    countryCode: 'ar',
-  };
-
-  const runId = await startActor(token, 'apify~google-search-scraper', input);
-  const results = await pollRun(token, runId);
-
-  // Parse results
-  const brief = { name, city, query, sources: [] };
-  const allResults = [];
-
-  for (const page of results) {
-    if (page.organicResults) {
-      for (const r of page.organicResults) {
-        allResults.push({ title: r.title, url: r.url, description: r.description });
-      }
-    }
-  }
-
-  brief.sources = allResults;
-
-  // Find Instagram
-  const igResult = allResults.find(r => r.url && r.url.includes('instagram.com'));
-  if (igResult) {
-    const match = igResult.url.match(/instagram\.com\/([^/?]+)/);
-    if (match) brief.instagram = 'https://www.instagram.com/' + match[1] + '/';
-  }
-
-  // Find Google Maps
-  const mapsResult = allResults.find(r => r.url && (r.url.includes('maps.google') || r.url.includes('google.com/maps')));
-  if (mapsResult) brief.googleMaps = mapsResult.url;
-
-  // Find website (not social, not maps, not directory)
-  const skipDomains = ['instagram.com','facebook.com','google.com','yelp.com','tripadvisor','maps.','youtube.com'];
-  const website = allResults.find(r => r.url && !skipDomains.some(d => r.url.includes(d)));
-  if (website) brief.website = website.url;
-
-  // Now fetch website copy if found
-  if (brief.website) {
-    setStatus('Found website: ' + brief.website + ' — fetching copy...', 'info');
-    try {
-      const proxyResp = await fetch('/api/proxy?url=' + encodeURIComponent(brief.website));
-      const html = await proxyResp.text();
-      // Extract text from HTML
-      const div = document.createElement('div');
-      div.innerHTML = html;
-      // Remove scripts and styles
-      div.querySelectorAll('script,style,nav,footer,header').forEach(el => el.remove());
-      const text = div.innerText || div.textContent || '';
-      // Clean up whitespace
-      brief.websiteCopy = text.replace(/\s+/g, ' ').trim().substring(0, 5000);
-    } catch(e) {
-      brief.websiteCopyError = 'Could not fetch website: ' + e.message;
-    }
-  }
-
-  data = { mode: 'research', brief };
-  renderResearch(brief);
-}
-
-function renderResearch(brief) {
-  document.getElementById('setup-card').classList.add('hidden');
-  document.getElementById('results-card').classList.remove('hidden');
-
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-num">${brief.sources.length}</div><div class="stat-label">results found</div></div>
-    <div class="stat"><div class="stat-num">${brief.instagram ? '✓' : '—'}</div><div class="stat-label">Instagram</div></div>
-    <div class="stat"><div class="stat-num">${brief.website ? '✓' : '—'}</div><div class="stat-label">Website</div></div>
-  `;
-
-  document.getElementById('result-tabs').innerHTML = `
-    <button class="tab active" onclick="switchTab('posts',this)">Overview</button>
-    <button class="tab" onclick="switchTab('captions',this)">Website copy</button>
-  `;
-
-  let overview = `<div style="font-size:13px;line-height:1.8;">`;
-  if (brief.website) overview += `<p><strong>Website:</strong> <a href="${brief.website}" target="_blank" style="color:#1a56db">${brief.website}</a></p>`;
-  if (brief.instagram) overview += `<p><strong>Instagram:</strong> <a href="${brief.instagram}" target="_blank" style="color:#1a56db">${brief.instagram}</a></p>`;
-  if (brief.googleMaps) overview += `<p><strong>Google Maps:</strong> <a href="${brief.googleMaps}" target="_blank" style="color:#1a56db">View on Maps</a></p>`;
-  overview += `<hr style="margin:12px 0;border-color:#eee;"><p style="font-weight:600;margin-bottom:8px;">All search results:</p>`;
-  for (const s of brief.sources) {
-    overview += `<div style="margin-bottom:10px;padding:10px;border:1px solid #eee;border-radius:6px;">
-      <a href="${s.url}" target="_blank" style="color:#1a56db;font-weight:500;font-size:13px;">${s.title}</a>
-      <p style="color:#666;font-size:12px;margin-top:3px;">${s.description || ''}</p>
-    </div>`;
-  }
-  overview += '</div>';
-  document.getElementById('pane-posts').innerHTML = overview;
-
-  const copy = brief.websiteCopy || brief.websiteCopyError || 'No website found to extract copy from.';
-  document.getElementById('pane-captions').innerHTML = `
-    <div style="margin-bottom:10px;">
-      <button class="btn btn-outline" style="width:auto;padding:8px 16px;" onclick="dlResearchJSON()">Download full brief JSON</button>
-    </div>
-    <pre style="font-size:12px;color:#333;line-height:1.7;white-space:pre-wrap;background:#f9f9f5;padding:16px;border-radius:8px;">${copy}</pre>
-  `;
-
-  document.getElementById('dl-btns').innerHTML = `
-    <button class="btn btn-outline" onclick="dlResearchJSON()">Download brief JSON</button>
-    <button class="btn btn-outline" onclick="copyBrief()">Copy brief</button>
-    <button class="btn btn-outline" onclick="sendToBuilder()">Send to builder ↗</button>
-  `;
-}
-
-function dlResearchJSON() {
-  if (!data) return;
-  const blob = new Blob([JSON.stringify(data.brief, null, 2)], {type:'application/json'});
-  triggerDownload(blob, 'business-brief.json');
-}
-
-function copyBrief() {
-  if (!data) return;
-  const b = data.brief;
-  const text = [
-    'BUSINESS: ' + b.name,
-    'CITY: ' + b.city,
-    b.website ? 'WEBSITE: ' + b.website : '',
-    b.instagram ? 'INSTAGRAM: ' + b.instagram : '',
-    b.googleMaps ? 'GOOGLE MAPS: ' + b.googleMaps : '',
-    '',
-    'WEBSITE COPY:',
-    b.websiteCopy || '(none found)',
-  ].filter(Boolean).join('\n');
-  navigator.clipboard.writeText(text).then(() => alert('Copied to clipboard!'));
-}
-
-function sendToBuilder() {
-  alert('Coming soon — will auto-trigger the Builder with this brief.');
-}
-
 async function startScrape() {
   const token = document.getElementById('token').value.trim();
   if (!token) { setStatus('Please enter your Apify API token', 'error'); return; }
@@ -492,20 +273,12 @@ async function startScrape() {
   try {
     if (currentMode === 'all') {
       await scrapeAll(token);
-    } else if (currentMode === 'gmaps') {
-      await scrapeGmaps(token);
-    } else if (currentMode === 'ig') {
-      await scrapeInstagram(token);
-    } else if (currentMode === 'fb') {
-      await scrapeFacebook(token);
     } else if (currentMode === 'special') {
       await scrapeSpecial(token);
     } else if (currentMode === 'audit') {
       await runGMBAudit(token);
     } else if (currentMode === 'rank') {
       await runRankTracker(token);
-    } else {
-      await scrapeResearch(token);
     }
   } catch(e) {
     setStatus('Error: ' + e.message, 'error');
@@ -682,9 +455,6 @@ function renderAll(combined) {
   // Overview
   const gmaps = combined.gmaps || {};
   const research = researchData || {};
-  // Auto-fill business name if Maps data available
-  const autoName = gmaps.title || '';
-  const autoCity = gmaps.address ? gmaps.address.split(',').slice(-2).join(',').trim() : '';
   let overviewHtml = '<div style="font-size:14px;line-height:2;">';
   if (gmaps.title) overviewHtml += `<p><strong>Name:</strong> ${gmaps.title}</p>`;
   if (gmaps.address) overviewHtml += `<p><strong>Address:</strong> ${gmaps.address}</p>`;
@@ -762,11 +532,15 @@ function renderAll(combined) {
 
   document.getElementById('dl-btns').innerHTML = `
     <button class="btn btn-outline" onclick="dlAllJSON()">Download full brief</button>
-    <button class="btn btn-outline" onclick="dlAllCaptions()">Captions .txt</button>
     <button class="btn btn-outline" onclick="dlResearchTxt()">Research .txt</button>
-    <button class="btn btn-outline" onclick="dlAllPhotos()">Save all photos</button>
     <button class="btn btn-primary" onclick="dlZipAll()" style="grid-column:1/-1;">⬇ Download everything as ZIP</button>
   `;
+}
+
+function dlAllJSON() {
+  if (!data) return;
+  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
+  triggerDownload(blob, 'full-brief.json');
 }
 
 function dlResearchTxt() {
@@ -893,178 +667,6 @@ async function dlZipAll() {
   btn.disabled = false;
   btn.textContent = '⬇ Download everything as ZIP';
 }
-async function dlAllPhotos() {
-  if (!data) return;
-  const gmapsPhotos = data.gmaps?.imageUrls || [];
-  const igPhotos = (data.ig || []).filter(p => p.displayUrl || p.videoUrl);
-  let saved = 0;
-  for (let i = 0; i < gmapsPhotos.length; i++) {
-    try {
-      const blob = await proxyFetch(gmapsPhotos[i]);
-      triggerDownload(blob, `gmaps-${String(i+1).padStart(2,'0')}.jpg`);
-      saved++; await sleep(400);
-    } catch(e) {}
-  }
-  // FB photos
-  const fbAllPhotos = (data.fb||[]).flatMap(p=>(p.media||[]).map(m=>m.url||m.src||'')).filter(Boolean);
-  for (let i = 0; i < fbAllPhotos.length; i++) {
-    try {
-      const blob = await proxyFetch(fbAllPhotos[i]);
-      photosFolder.file(`fb-${String(i+1).padStart(2,'0')}.jpg`, blob);
-      count++;
-      btn.textContent = `Downloading photos... (${count}/${gmapsPhotos.length + igPhotos.length + fbAllPhotos.length})`;
-    } catch(e) {}
-  }
-
-  for (let i = 0; i < igPhotos.length; i++) {
-    try {
-      const p = igPhotos[i];
-      const url = p.type === 'Video' ? (p.videoUrl || p.displayUrl) : p.displayUrl;
-      const blob = await proxyFetch(url);
-      const ext = p.type === 'Video' ? 'mp4' : 'jpg';
-      triggerDownload(blob, `ig-${String(i+1).padStart(2,'0')}.${ext}`);
-      saved++; await sleep(400);
-    } catch(e) {}
-  }
-  alert('Downloaded ' + saved + ' files!');
-}
-
-async function scrapeFacebook(token) {
-  const query = document.getElementById('fb-query').value.trim();
-  if (!query) throw new Error('Please enter a Facebook page URL');
-  const maxPosts = parseInt(document.getElementById('fb-maxPosts').value);
-
-  setStatus('Starting Facebook scraper... 1-3 minutes', 'info');
-
-  const input = {
-    startUrls: [{ url: query }],
-    maxPosts: maxPosts,
-    scrapeAbout: true,
-    scrapeReviews: false,
-  };
-
-  const runId = await startActor(token, 'apify~facebook-posts-scraper', input);
-  const result = await pollRun(token, runId);
-  data = { mode: 'fb', posts: result };
-  renderFacebook(result);
-}
-
-function renderFacebook(posts) {
-  document.getElementById('setup-card').classList.add('hidden');
-  document.getElementById('results-card').classList.remove('hidden');
-
-  const withCaption = posts.filter(p => p.text && p.text.trim().length > 0);
-  const withPhoto = posts.filter(p => p.media && p.media.length > 0);
-
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-num">${posts.length}</div><div class="stat-label">posts</div></div>
-    <div class="stat"><div class="stat-num">${withCaption.length}</div><div class="stat-label">with captions</div></div>
-    <div class="stat"><div class="stat-num">${withPhoto.length}</div><div class="stat-label">with photos</div></div>
-  `;
-
-  document.getElementById('result-tabs').innerHTML = `
-    <button class="tab active" onclick="switchTab('posts',this)">Posts (${posts.length})</button>
-    <button class="tab" onclick="switchTab('captions',this)">Captions (${withCaption.length})</button>
-    <button class="tab" onclick="switchTab('photos',this)">Photos</button>
-  `;
-
-  document.getElementById('pane-posts').innerHTML = posts.length === 0
-    ? '<p style="color:#999;font-size:13px">No posts found.</p>'
-    : posts.map((p,i) => {
-      const img = p.media && p.media[0] ? `<img src="${p.media[0].url || p.media[0].src || ''}" style="width:100%;max-height:300px;object-fit:cover;border-radius:6px;margin-bottom:8px;" onerror="this.style.display='none'" />` : '';
-      return `<div class="review" style="margin-bottom:12px;">
-        ${img}
-        <div style="font-size:13px;color:#333;line-height:1.6;white-space:pre-wrap;">${p.text || '(no text)'}</div>
-        <div style="font-size:12px;color:#999;margin-top:6px;">${p.time ? new Date(p.time*1000).toLocaleDateString() : ''} · ${p.likes || 0} likes</div>
-      </div>`;
-    }).join('');
-
-  document.getElementById('pane-captions').innerHTML = withCaption.length === 0
-    ? '<p style="color:#999;font-size:13px">No captions.</p>'
-    : `<div style="margin-bottom:10px;"><button class="btn btn-outline" style="width:auto;padding:8px 16px;" onclick="dlFbCaptions()">Download captions .txt</button></div>` +
-      withCaption.map((p,i) => `<div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;">
-        <div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.time ? new Date(p.time*1000).toLocaleDateString() : ''}</div>
-        <div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.text}</div>
-      </div>`).join('');
-
-  const allPhotos = posts.flatMap(p => (p.media || []).map(m => m.url || m.src || '')).filter(Boolean);
-  document.getElementById('pane-photos').innerHTML = allPhotos.length === 0
-    ? '<p style="color:#999;font-size:13px">No photos found.</p>'
-    : `<div class="photo-grid">${allPhotos.map(url => `<img src="${url}" onclick="window.open('${url}','_blank')" onerror="this.style.display='none'" />`).join('')}</div>`;
-
-  document.getElementById('dl-btns').innerHTML = `
-    <button class="btn btn-outline" onclick="dlJSON()">Download JSON</button>
-    <button class="btn btn-outline" onclick="dlFbCaptions()">Captions .txt</button>
-    <button class="btn btn-outline" onclick="dlFbPhotos()">Save all photos</button>
-  `;
-}
-
-function dlFbCaptions() {
-  if (!data || data.mode !== 'fb') return;
-  const lines = data.posts.filter(p=>p.text).map((p,i)=>'--- Post ' + (i+1) + ' ---\n' + p.text + '\n').join('\n');
-  triggerDownload(new Blob([lines], {type:'text/plain'}), 'facebook-captions.txt');
-}
-
-async function dlFbPhotos() {
-  if (!data || data.mode !== 'fb') return;
-  const allPhotos = data.posts.flatMap(p => (p.media||[]).map(m => m.url||m.src||'')).filter(Boolean);
-  if (!allPhotos.length) { alert('No photos found.'); return; }
-  let saved = 0;
-  for (let i = 0; i < allPhotos.length; i++) {
-    try {
-      const blob = await proxyFetch(allPhotos[i]);
-      triggerDownload(blob, `fb-photo-${String(i+1).padStart(2,'0')}.jpg`);
-      saved++; await sleep(400);
-    } catch(e) {}
-  }
-  alert('Downloaded ' + saved + ' photos!');
-}
-
-async function scrapeGmaps(token) {
-  const query = document.getElementById('gmaps-query').value.trim();
-  if (!query) { throw new Error('Please enter a Google Maps URL or business name'); }
-
-  const maxReviews = parseInt(document.getElementById('maxReviews').value);
-  const maxPhotos = parseInt(document.getElementById('maxPhotos').value);
-  const isUrl = query.startsWith('http');
-
-  setStatus('Starting Google Maps scraper... 1–3 minutes', 'info');
-
-  const input = {
-    startUrls: isUrl ? [{ url: query }] : [],
-    searchStringsArray: isUrl ? [] : [query],
-    maxReviews,
-    maxImages: maxPhotos,
-    reviewsSort: 'newest',
-    language: 'en',
-    scrapeReviewerInfo: true,
-  };
-
-  const runId = await startActor(token, 'compass~crawler-google-places', input);
-  const result = await pollRun(token, runId);
-  data = { mode: 'gmaps', place: result[0] };
-  renderGmaps(result[0]);
-}
-
-async function scrapeInstagram(token) {
-  const query = document.getElementById('ig-query').value.trim();
-  if (!query) { throw new Error('Please enter an Instagram profile URL'); }
-  const maxPosts = parseInt(document.getElementById('maxPosts').value);
-
-  setStatus('Starting Instagram scraper... 1–4 minutes', 'info');
-
-  const username = query.replace('https://www.instagram.com/', '').replace('http://www.instagram.com/', '').replace(/\/$/, '').replace('@', '');
-
-  const input = {
-    username: [username],
-    resultsLimit: maxPosts,
-  };
-
-  const runId = await startActor(token, 'apify~instagram-post-scraper', input);
-  const result = await pollRun(token, runId);
-  data = { mode: 'ig', posts: result };
-  renderInstagram(result);
-}
 
 async function startActor(token, actorId, input) {
   const resp = await fetch(`https://api.apify.com/v2/acts/${actorId}/runs?token=${token}`, {
@@ -1114,111 +716,6 @@ async function pollRun(token, runId) {
   throw new Error('Timed out. Check your Apify console.');
 }
 
-function renderGmaps(place) {
-  document.getElementById('setup-card').classList.add('hidden');
-  document.getElementById('results-card').classList.remove('hidden');
-
-  const reviews = place.reviews || [];
-  const photos = place.imageUrls || place.images || [];
-  const rating = parseFloat(place.totalScore || place.rating || 0).toFixed(1);
-
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-num">${rating}</div><div class="stat-label">avg rating</div></div>
-    <div class="stat"><div class="stat-num">${place.reviewsCount || reviews.length}</div><div class="stat-label">reviews</div></div>
-    <div class="stat"><div class="stat-num">${photos.length}</div><div class="stat-label">photos</div></div>
-  `;
-
-  document.getElementById('result-tabs').innerHTML = `
-    <button class="tab active" onclick="switchTab('reviews',this)">Reviews (${reviews.length})</button>
-    <button class="tab" onclick="switchTab('photos',this)">Photos (${photos.length})</button>
-  `;
-
-  document.getElementById('pane-reviews').innerHTML = reviews.length === 0
-    ? '<p style="color:#999;font-size:13px">No reviews returned.</p>'
-    : reviews.map(r => `
-      <div class="review">
-        <div class="rev-header">
-          <span class="rev-name">${r.name || 'Anonymous'}</span>
-          <span class="rev-stars">${'★'.repeat(r.stars||0)}${'☆'.repeat(5-(r.stars||0))}</span>
-        </div>
-        <div class="rev-text">${r.text || r.reviewOriginText || '(no text)'}</div>
-        <div class="rev-date">${r.publishedAtDate ? new Date(r.publishedAtDate).toLocaleDateString() : ''}</div>
-      </div>`).join('');
-
-  document.getElementById('pane-photos').innerHTML = photos.length === 0
-    ? '<p style="color:#999;font-size:13px">No photos found.</p>'
-    : `<div class="photo-grid">${photos.map((url,i) =>
-        `<img src="${url}" alt="${i+1}" onclick="window.open('${url}','_blank')" onerror="this.style.display='none'" />`
-      ).join('')}</div>`;
-
-  document.getElementById('dl-btns').innerHTML = `
-    <button class="btn btn-outline" onclick="dlJSON()">Download JSON</button>
-    <button class="btn btn-outline" onclick="dlCSV()">Reviews CSV</button>
-    <button class="btn btn-outline" onclick="dlPhotos()">Save all photos</button>
-  `;
-}
-
-function renderInstagram(posts) {
-  document.getElementById('setup-card').classList.add('hidden');
-  document.getElementById('results-card').classList.remove('hidden');
-
-  const photos = posts.filter(p => p.type === 'Image' || !p.type);
-  const videos = posts.filter(p => p.type === 'Video');
-  const withCaption = posts.filter(p => p.caption && p.caption.trim().length > 0);
-
-  document.getElementById('stats').innerHTML = `
-    <div class="stat"><div class="stat-num">${posts.length}</div><div class="stat-label">posts</div></div>
-    <div class="stat"><div class="stat-num">${withCaption.length}</div><div class="stat-label">with captions</div></div>
-    <div class="stat"><div class="stat-num">${videos.length}</div><div class="stat-label">videos</div></div>
-  `;
-
-  document.getElementById('result-tabs').innerHTML = `
-    <button class="tab active" onclick="switchTab('posts',this)">Posts</button>
-    <button class="tab" onclick="switchTab('captions',this)">Captions only</button>
-  `;
-
-  document.getElementById('pane-posts').innerHTML = posts.map(p => {
-    const mediaUrl = p.displayUrl || p.thumbnailUrl || '';
-    const isVideo = p.type === 'Video';
-    const media = isVideo
-      ? `<video src="${p.videoUrl || mediaUrl}" controls poster="${mediaUrl}" style="width:100%;max-height:400px;"></video>`
-      : `<img src="${mediaUrl}" alt="post" onclick="window.open('${mediaUrl}','_blank')" />`;
-    const likes = p.likesCount || 0;
-    const comments = p.commentsCount || 0;
-    const date = p.timestamp ? new Date(p.timestamp).toLocaleDateString() : '';
-    return `<div class="ig-post">
-      ${media}
-      <div class="ig-post-body">
-        <span class="ig-type">${isVideo ? 'Video' : 'Photo'}</span>
-        <div class="ig-caption">${p.caption || '(no caption)'}</div>
-        <div class="ig-meta">
-          <span>♥ ${likes}</span>
-          <span>💬 ${comments}</span>
-          <span>${date}</span>
-          ${p.url ? `<a href="${p.url}" target="_blank" style="color:#1a56db">View on Instagram</a>` : ''}
-        </div>
-      </div>
-    </div>`;
-  }).join('');
-
-  document.getElementById('pane-captions').innerHTML = `
-    <div style="margin-bottom:10px;">
-      <button class="btn btn-outline" style="width:auto;padding:8px 16px;" onclick="dlCaptions()">Download all captions as .txt</button>
-    </div>
-    ${withCaption.map((p,i) => `
-      <div style="border:1px solid #eee;border-radius:8px;padding:14px;margin-bottom:10px;">
-        <div style="font-size:12px;color:#999;margin-bottom:6px;">Post ${i+1} — ${p.timestamp ? new Date(p.timestamp).toLocaleDateString() : ''}</div>
-        <div style="font-size:13px;color:#333;line-height:1.7;white-space:pre-wrap;">${p.caption}</div>
-      </div>`).join('')}
-  `;
-
-  document.getElementById('dl-btns').innerHTML = `
-    <button class="btn btn-outline" onclick="dlJSON()">Download JSON</button>
-    <button class="btn btn-outline" onclick="dlCaptions()">Captions .txt</button>
-    <button class="btn btn-outline" onclick="dlIgPhotos()">Save all photos</button>
-  `;
-}
-
 function switchTab(name, btn) {
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
@@ -1226,50 +723,6 @@ function switchTab(name, btn) {
     const el = document.getElementById('pane-' + p);
     if (el) el.classList.toggle('hidden', p !== name);
   });
-}
-
-function dlJSON() {
-  if (!data) return;
-  const blob = new Blob([JSON.stringify(data, null, 2)], {type:'application/json'});
-  triggerDownload(blob, 'scraped-data.json');
-}
-
-function dlCSV() {
-  if (!data || data.mode !== 'gmaps') return;
-  const reviews = data.place.reviews || [];
-  const rows = [['Name','Stars','Text','Date','Likes']];
-  reviews.forEach(r => rows.push([
-    `"${(r.name||'').replace(/"/g,'')}"`,
-    r.stars||0,
-    `"${(r.text||r.reviewOriginText||'').replace(/"/g,'').replace(/\n/g,' ')}"`,
-    r.publishedAtDate||'',
-    r.likesCount||0
-  ]));
-  triggerDownload(new Blob([rows.map(r=>r.join(',')).join('\n')], {type:'text/csv'}), 'reviews.csv');
-}
-
-function dlCaptions() {
-  if (!data || data.mode !== 'ig') return;
-  const lines = data.posts
-    .filter(p => p.caption)
-    .map((p,i) => `--- Post ${i+1} (${p.timestamp ? new Date(p.timestamp).toLocaleDateString() : ''}) ---\n${p.caption}\n`)
-    .join('\n');
-  triggerDownload(new Blob([lines], {type:'text/plain'}), 'instagram-captions.txt');
-}
-
-async function dlPhotos() {
-  if (!data || data.mode !== 'gmaps') return;
-  const photos = data.place.imageUrls || data.place.images || [];
-  if (!photos.length) { alert('No photos found.'); return; }
-  for (let i = 0; i < photos.length; i++) {
-    try {
-      const resp = await fetch(photos[i]);
-      const blob = await resp.blob();
-      const ext = blob.type.includes('png') ? 'png' : 'jpg';
-      triggerDownload(blob, `gmaps-photo-${String(i+1).padStart(2,'0')}.${ext}`);
-      await sleep(400);
-    } catch(e) { console.warn('photo', i+1, e); }
-  }
 }
 
 async function proxyFetch(url, timeoutMs=8000) {
@@ -1284,27 +737,6 @@ async function proxyFetch(url, timeoutMs=8000) {
     clearTimeout(timer);
     throw e;
   }
-}
-
-async function dlIgPhotos() {
-  if (!data || data.mode !== 'ig') return;
-  const allMedia = data.posts.filter(p => p.displayUrl || p.videoUrl);
-  if (!allMedia.length) { alert('No media found.'); return; }
-  let saved = 0;
-  for (let i = 0; i < allMedia.length; i++) {
-    const post = allMedia[i];
-    const isVideo = post.type === 'Video';
-    const url = isVideo ? (post.videoUrl || post.displayUrl) : post.displayUrl;
-    if (!url) continue;
-    try {
-      const blob = await proxyFetch(url);
-      const ext = isVideo ? 'mp4' : (blob.type.includes('png') ? 'png' : 'jpg');
-      triggerDownload(blob, `ig-${String(i+1).padStart(2,'0')}.${ext}`);
-      saved++;
-      await sleep(600);
-    } catch(e) { console.warn('media error', i+1, e); }
-  }
-  alert('Done! Downloaded ' + saved + ' of ' + allMedia.length + ' files.');
 }
 
 function triggerDownload(blob, filename) {
@@ -1963,13 +1395,7 @@ async function runGMBAudit(token) {
     }
   }
 
-  // Dedup the master keyword list (many businesses might share "plomero cerca de mi")
-  // But we need location-specific searches, so we tag keywords with a biz index
-  // Strategy: group keywords by unique lat/lng, run one search per location cluster
-
-  // For simplicity and speed: run ALL unique keywords in one big run
-  // using the FIRST business's coordinates as the center
-  // This works well when all businesses are in the same city (which they are)
+  // Dedup the master keyword list
   var uniqueAllKw = [];
   var seenKw = {};
   for (var ak = 0; ak < allSearchKeywords.length; ak++) {
@@ -2185,7 +1611,7 @@ function renderBulkAudit(audits) {
     var health = quickProfileHealth(biz);
 
     html += '<div style="margin-bottom:16px;padding:12px;border:1px solid #e5e7eb;border-radius:8px;border-left:4px solid ' + (health.passed < health.total * 0.5 ? '#dc2626' : '#16a34a') + ';">';
-    
+
     // Header row: name + scores
     html += '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">';
     html += '<div><strong style="font-size:15px;">' + (biz.title || '') + '</strong>';
@@ -2226,40 +1652,6 @@ function renderBulkAudit(audits) {
 
   document.getElementById('dl-btns').innerHTML =
     '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlBulkAuditExcel()">Download All Audits (Excel)</button>';
-}
-
-function renderAudit(biz, results, barrio) {
-  document.getElementById('setup-card').classList.add('hidden');
-  document.getElementById('results-card').classList.remove('hidden');
-
-  var visible = results.filter(function(r){return r.found;}).length;
-  var invisible = results.filter(function(r){return !r.found;}).length;
-
-  var bizName = biz.title || '';
-  var bizCategory = biz.categoryName || '';
-  var bizRating = biz.totalScore || 0;
-  var bizReviews = biz.reviewsCount || 0;
-  var bizPhotos = biz.imageCount || biz.imagesCount || 0;
-  var bizWebsite = biz.website || '';
-
-  // Stats
-  document.getElementById('stats').innerHTML =
-    '<div class="stat"><div class="stat-num">' + results.length + '</div><div class="stat-label">keywords checked</div></div>' +
-    '<div class="stat" style="background:#dcfce7;"><div class="stat-num" style="color:#16a34a;">' + visible + '</div><div class="stat-label">VISIBLE</div></div>' +
-    '<div class="stat" style="background:#fef2f2;"><div class="stat-num" style="color:#dc2626;">' + invisible + '</div><div class="stat-label">INVISIBLE</div></div>' +
-    '<div class="stat"><div class="stat-num">' + bizReviews + '</div><div class="stat-label">reviews</div></div>';
-
-  // Tabs
-  document.getElementById('result-tabs').innerHTML =
-    '<button class="tab active" onclick="switchAuditTab(\'all\',this)">All (' + results.length + ')</button>' +
-    '<button class="tab" onclick="switchAuditTab(\'invisible\',this)">Invisible (' + invisible + ')</button>' +
-    '<button class="tab" onclick="switchAuditTab(\'visible\',this)">Visible (' + visible + ')</button>' +
-    '<button class="tab" onclick="switchAuditTab(\'profile\',this)">Profile</button>';
-
-  renderAuditKeywords(results, 'all');
-
-  document.getElementById('dl-btns').innerHTML =
-    '<button class="btn btn-primary" style="grid-column:1/-1;" onclick="dlAuditExcel()">Download Audit Report (Excel)</button>';
 }
 
 function switchAuditTab(filter, btn) {
@@ -2362,259 +1754,6 @@ function renderAuditProfile() {
 
   document.getElementById('pane-posts').innerHTML = html;
   document.getElementById('pane-posts').classList.remove('hidden');
-}
-
-function dlAuditExcel() {
-  var biz = window._auditBiz;
-  var results = window._auditResults;
-  var barrio = window._auditBarrio || '';
-  if (!biz || !results) return;
-
-  var lang = document.getElementById('audit-lang').value;
-  var isES = lang === 'es';
-
-  // Labels
-  var L = isES ? {
-    title: 'INFORME DE VISIBILIDAD',
-    business: 'Negocio',
-    address: 'Dirección',
-    phone: 'Teléfono',
-    website: 'Sitio web',
-    category: 'Categoría',
-    rating: 'Calificación',
-    photos: 'Fotos',
-    profile: 'Perfil de Google Maps',
-    visScore: 'PUNTAJE DE VISIBILIDAD',
-    ofSearches: 'de',
-    searches: 'búsquedas',
-    search: 'BÚSQUEDA',
-    visible: 'VISIBLE?',
-    position: 'POSICIÓN',
-    whoInstead: 'QUIÉN APARECE EN SU LUGAR',
-    theirRating: 'CALIF.',
-    theirReviews: 'RESEÑAS',
-    yes: 'SÍ',
-    no: 'NO',
-    checklist: 'CHECKLIST DEL PERFIL',
-    needsMore: 'NECESITA MÁS — competidores tienen 30+',
-    askCustomers: 'NECESITA MÁS — pedir a cada cliente',
-    addMore: 'AGREGAR MÁS — competidores usan 3-5',
-    writeOne: 'ESCRIBIR UNA — 750 caracteres máx',
-    needsWebsite: 'NECESITA SITIO WEB',
-    ok: 'OK',
-    hasOne: 'Tiene',
-    missing: 'FALTA',
-    empty: 'VACÍO',
-    written: 'Escrita',
-    hoursSet: 'Horarios',
-    noWebsite: 'SIN SITIO WEB',
-    reviews: 'Reseñas',
-    categories: 'Categorías',
-    description: 'Descripción',
-  } : {
-    title: 'VISIBILITY REPORT',
-    business: 'Business',
-    address: 'Address',
-    phone: 'Phone',
-    website: 'Website',
-    category: 'Category',
-    rating: 'Rating',
-    photos: 'Photos',
-    profile: 'Google Maps Profile',
-    visScore: 'VISIBILITY SCORE',
-    ofSearches: 'of',
-    searches: 'searches',
-    search: 'SEARCH',
-    visible: 'VISIBLE?',
-    position: 'POSITION',
-    whoInstead: 'WHO SHOWS UP INSTEAD',
-    theirRating: 'RATING',
-    theirReviews: 'REVIEWS',
-    yes: 'YES',
-    no: 'NO',
-    checklist: 'PROFILE CHECKLIST',
-    needsMore: 'NEEDS MORE — competitors have 30+',
-    askCustomers: 'NEEDS MORE — ask every customer',
-    addMore: 'ADD MORE — competitors use 3-5',
-    writeOne: 'WRITE ONE — 750 chars max',
-    needsWebsite: 'NEEDS A WEBSITE',
-    ok: 'OK',
-    hasOne: 'Has one',
-    missing: 'MISSING',
-    empty: 'EMPTY',
-    written: 'Written',
-    hoursSet: 'Hours set',
-    noWebsite: 'NO WEBSITE',
-    reviews: 'Reviews',
-    categories: 'Categories',
-    description: 'Description',
-  };
-
-  var wb = XLSX.utils.book_new();
-  var visible = results.filter(function(r){return r.found;}).length;
-  var invisible = results.filter(function(r){return !r.found;}).length;
-  var visPct = Math.round(visible / results.length * 100);
-  var gmapsUrl = biz.url || biz.placeUrl || '';
-
-  var data = [];
-  var merges = [];
-  var rowIdx = 0;
-
-  // Row 0: Title
-  data.push([L.title, '', '', '', '', '', '']);
-  rowIdx++;
-
-  // Row 1: empty
-  data.push(['']);
-  rowIdx++;
-
-  // Row 2: yellow separator
-  data.push(['', '', '', '', '', '', '']);
-  rowIdx++;
-
-  // Profile block
-  data.push([L.business, biz.title || '']);
-  data.push([L.address, biz.address || '']);
-  data.push([L.phone, biz.phone || '']);
-  data.push([L.website, biz.website || L.noWebsite]);
-  data.push([L.category, biz.categoryName || '']);
-  data.push([L.rating, (biz.totalScore || 0) + ' ★ (' + (biz.reviewsCount || 0) + ' ' + L.reviews.toLowerCase() + ')']);
-  data.push([L.photos, (biz.imageCount || biz.imagesCount || 0)]);
-  data.push([L.profile, gmapsUrl]);
-  rowIdx += 8;
-
-  // Empty row
-  data.push(['']);
-  rowIdx++;
-
-  // Visibility score
-  data.push([L.visScore, visPct + '%', '', visible + ' ' + L.ofSearches + ' ' + results.length + ' ' + L.searches]);
-  rowIdx++;
-
-  // Empty row
-  data.push(['']);
-  rowIdx++;
-
-  // Header row for search results
-  var headerRow = rowIdx;
-  data.push([L.search, L.visible, L.position, L.whoInstead, '', L.theirRating, L.theirReviews]);
-  rowIdx++;
-
-  // Search results
-  for (var i = 0; i < results.length; i++) {
-    var r = results[i];
-    var c1 = r.topCompetitors[0] || {};
-    var c2 = r.topCompetitors[1] || {};
-
-    data.push([
-      r.keyword,
-      r.found ? L.yes : L.no,
-      r.found ? '#' + r.position : '—',
-      c1.name || '',
-      '',
-      c1.rating || '',
-      c1.reviews || '',
-    ]);
-    rowIdx++;
-
-    if (!r.found && c2.name) {
-      data.push(['', '', '', c2.name, '', c2.rating, c2.reviews]);
-      rowIdx++;
-    }
-  }
-
-  // Empty rows
-  data.push(['']);
-  data.push(['']);
-  rowIdx += 2;
-
-  // Yellow separator
-  var sep2Row = rowIdx;
-  data.push(['', '', '', '', '', '', '']);
-  rowIdx++;
-
-  // Empty row
-  data.push(['']);
-  rowIdx++;
-
-  // Profile checklist
-  data.push([L.checklist]);
-  rowIdx++;
-
-  var photos = biz.imageCount || biz.imagesCount || 0;
-  var reviews = biz.reviewsCount || 0;
-  var cats = (biz.categories || []).length;
-  var hasDesc = biz.description && biz.description.length > 50;
-  var hasHours = biz.openingHours && biz.openingHours.length > 0;
-
-  data.push([L.photos, photos, photos >= 10 ? L.ok : L.needsMore]);
-  data.push([L.reviews, reviews, reviews >= 20 ? L.ok : L.askCustomers]);
-  data.push([L.categories, cats, cats >= 3 ? L.ok : L.addMore]);
-  data.push([L.description, hasDesc ? L.written : L.empty, hasDesc ? L.ok : L.writeOne]);
-  data.push([L.website, biz.website ? L.hasOne : L.missing, biz.website ? '' : L.needsWebsite]);
-  data.push([L.hoursSet, hasHours ? L.yes : L.no, hasHours ? L.ok : '']);
-
-  var ws = XLSX.utils.aoa_to_sheet(data);
-
-  // Column widths
-  ws['!cols'] = [
-    {wch: 32},  // A
-    {wch: 12},  // B
-    {wch: 10},  // C
-    {wch: 45},  // D
-    {wch: 2},   // E spacer
-    {wch: 8},   // F
-    {wch: 10},  // G
-  ];
-
-  // ── Styling ──
-  // Title row — big bold
-  var titleCell = ws['A1'];
-  if (titleCell) titleCell.s = {font: {bold: true, sz: 22}, alignment: {horizontal: 'left'}};
-
-  // Yellow separator rows
-  for (var col = 0; col < 7; col++) {
-    var colLetter = String.fromCharCode(65 + col);
-    // Row 3 (index 2) — first separator
-    var ref1 = colLetter + '3';
-    if (!ws[ref1]) ws[ref1] = {v: '', t: 's'};
-    ws[ref1].s = {fill: {fgColor: {rgb: 'FFD700'}}};
-    // Second separator
-    var ref2 = colLetter + (sep2Row + 1);
-    if (!ws[ref2]) ws[ref2] = {v: '', t: 's'};
-    ws[ref2].s = {fill: {fgColor: {rgb: 'FFD700'}}};
-  }
-
-  // Bold the profile labels (column A rows 4-11)
-  for (var pr = 3; pr <= 11; pr++) {
-    var pRef = 'A' + (pr + 1);
-    if (ws[pRef]) ws[pRef].s = {font: {bold: true}};
-  }
-
-  // Bold visibility score
-  var vsRef = 'A' + (headerRow); // row before header
-  if (ws[vsRef]) ws[vsRef].s = {font: {bold: true, sz: 14}};
-
-  // Bold header row
-  var hdrRowNum = headerRow + 1;
-  for (var h = 0; h < 7; h++) {
-    var hRef = String.fromCharCode(65 + h) + hdrRowNum;
-    if (ws[hRef]) ws[hRef].s = {font: {bold: true}, fill: {fgColor: {rgb: 'F3F4F6'}}};
-  }
-
-  // Bold checklist header
-  // Bold NO cells in red
-  // Make GMB URL a hyperlink
-  var gmapsRowNum = 12; // row 11 = profile link (0-indexed row 10, so Excel row 11)
-  var gmapsCellRef = 'B' + gmapsRowNum;
-  if (ws[gmapsCellRef] && gmapsUrl) {
-    ws[gmapsCellRef].l = {Target: gmapsUrl, Tooltip: 'Open Google Maps profile'};
-  }
-
-  XLSX.utils.book_append_sheet(wb, ws, 'Report');
-
-  var name = (biz.title || 'audit').toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 30);
-  XLSX.writeFile(wb, 'gmb-audit-' + name + '.xlsx');
 }
 
 // Keyword counter for Special Research
@@ -3648,8 +2787,8 @@ function dlBulkAuditExcel() {
       var comps = results[ci].topCompetitors || [];
       for (var cj = 0; cj < comps.length; cj++) {
         var cc = comps[cj].categories || [];
-        for (var ck = 0; ck < cc.length; ck++) {
-          var catName = cc[ck];
+        for (var ck2 = 0; ck2 < cc.length; ck2++) {
+          var catName = cc[ck2];
           if (!compCatCount[catName]) compCatCount[catName] = 0;
           compCatCount[catName]++;
         }
@@ -3679,13 +2818,6 @@ function dlBulkAuditExcel() {
 
   var ws = XLSX.utils.aoa_to_sheet(data);
   ws['!cols'] = [{wch:32},{wch:12},{wch:8},{wch:45},{wch:2},{wch:8},{wch:10}];
-
-  // Add hyperlinks for GMB profile URLs
-  var rowNum = 1;
-  for (var ai = 0; ai < audits.length; ai++) {
-    // Find the profile row for each business — it's at offset 10 from each separator
-    // This is approximate; hyperlinks are best-effort
-  }
 
   XLSX.utils.book_append_sheet(wb, ws, isES ? 'Detalle' : 'Details');
   var dateStr = new Date().toISOString().slice(0,10);

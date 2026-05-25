@@ -83,6 +83,9 @@
       <button class="mode-btn" id="mode-rank" onclick="setMode('rank')" style="background:#f0fdf4;border-color:#22c55e;">
         <span class="icon">🗺️</span>Rank Tracker
       </button>
+      <button class="mode-btn" id="mode-gap" onclick="setMode('gap')" style="background:#eef2ff;border-color:#6366f1;">
+        <span class="icon">🔍</span>GAP Research
+      </button>
     </div>
 
     <label>Apify API token</label>
@@ -198,6 +201,47 @@ https://www.google.com/maps/place/Business+3/..." style="width:100%;box-sizing:b
         </div>
       </div>
     </div>
+
+    <div id="gap-fields" class="hidden">
+      <div class="tip" style="background:#eef2ff;border-color:#6366f1;">Finds the <strong>content gap</strong> — what people in this city are actually asking that the top 10 ranking pages aren't answering. Output: a content brief telling you exactly what to put on the page so it doesn't get cut from Google's index. Takes ~2 min.</div>
+      <label>Service / keyword</label>
+      <input type="text" id="gap-keyword" placeholder="plumber, painter, dentist, hair salon..." />
+      <label>City</label>
+      <input type="text" id="gap-city" placeholder="Houston, Buenos Aires, Uppsala..." />
+      <div style="display:flex;gap:12px;margin-top:0;">
+        <div style="flex:1;">
+          <label>Country code (for SERP)</label>
+          <select id="gap-country">
+            <option value="us" selected>United States (us)</option>
+            <option value="ar">Argentina (ar)</option>
+            <option value="se">Sweden (se)</option>
+            <option value="de">Germany (de)</option>
+            <option value="gb">United Kingdom (gb)</option>
+            <option value="ca">Canada (ca)</option>
+            <option value="au">Australia (au)</option>
+            <option value="es">Spain (es)</option>
+            <option value="mx">Mexico (mx)</option>
+            <option value="br">Brazil (br)</option>
+          </select>
+        </div>
+        <div style="flex:1;">
+          <label>Language code</label>
+          <select id="gap-language">
+            <option value="en" selected>English (en)</option>
+            <option value="es">Spanish (es)</option>
+            <option value="sv">Swedish (sv)</option>
+            <option value="de">German (de)</option>
+            <option value="pt">Portuguese (pt)</option>
+            <option value="fr">French (fr)</option>
+          </select>
+        </div>
+      </div>
+      <label>Client's Google Maps URL (optional — for GBP gap check)</label>
+      <input type="text" id="gap-gmb-url" placeholder="https://www.google.com/maps/place/... — leave blank to skip" />
+      <div style="margin-top:8px;padding:10px;background:#f5f3ff;border:1px solid #c4b5fd;border-radius:8px;font-size:12px;color:#5b21b6;line-height:1.5;">
+        <strong>6-pass research:</strong> (1) Top 10 SERP consensus, (2) People Also Ask gaps, (3) Reddit complaints &amp; questions, (4) Top 3 competitor GBP reviews, (5) Related searches, (6) Client GBP audit. Output is a downloadable content brief.
+      </div>
+    </div>
     <div id="status" class="status info hidden"></div>
     <div class="progress hidden" id="progress-wrap"><div class="progress-bar" id="progress-bar" style="width:0%"></div></div>
 
@@ -225,14 +269,14 @@ let currentMode = 'all';
 
 function setMode(mode) {
   currentMode = mode;
-  ['all','special','audit','rank'].forEach(m => {
+  ['all','special','audit','rank','gap'].forEach(m => {
     var fields = document.getElementById(m + '-fields');
     if (fields) fields.classList.toggle('hidden', m !== mode);
     var btn = document.getElementById('mode-' + m);
     if (btn) btn.classList.toggle('active', m === mode);
   });
   // Change button text per mode
-  const btnText = mode === 'audit' ? 'Run GMB Audit' : mode === 'rank' ? 'Run Rank Tracker' : 'Start scraping';
+  const btnText = mode === 'audit' ? 'Run GMB Audit' : mode === 'rank' ? 'Run Rank Tracker' : mode === 'gap' ? 'Run GAP Research' : 'Start scraping';
   document.getElementById('run-btn').innerHTML = btnText;
 }
 
@@ -266,6 +310,8 @@ async function startScrape() {
       await runGMBAudit(token);
     } else if (currentMode === 'rank') {
       await runRankTracker(token);
+    } else if (currentMode === 'gap') {
+      await runGapResearch(token);
     }
   } catch(e) {
     setStatus('Error: ' + e.message, 'error');
@@ -2725,6 +2771,605 @@ function dlBulkAuditExcel() {
   var dateStr = new Date().toISOString().slice(0,10);
   XLSX.writeFile(wb, 'bulk-audit-' + dateStr + '.xlsx');
 }
+
+// =====================================================================
+// GAP RESEARCH — finds what top 10 ranking pages AREN'T saying
+// Output: a content brief telling you what to put on the page so it
+// doesn't get cut from Google's index.
+// =====================================================================
+
+async function runGapResearch(token) {
+  var keyword = document.getElementById('gap-keyword').value.trim();
+  var city = document.getElementById('gap-city').value.trim();
+  var country = document.getElementById('gap-country').value || 'us';
+  var lang = document.getElementById('gap-language').value || 'en';
+  var clientGmbUrl = document.getElementById('gap-gmb-url').value.trim();
+
+  if (!keyword || !city) throw new Error('Please fill in the service/keyword and city.');
+
+  var fullQuery = keyword + ' ' + city;
+  var brief = {
+    keyword: keyword,
+    city: city,
+    country: country,
+    language: lang,
+    query: fullQuery,
+    generated: new Date().toISOString(),
+    consensus: [],
+    paaGaps: [],
+    relatedSearches: [],
+    redditFindings: [],
+    competitorReviews: { loved: [], hated: [], competitors: [] },
+    clientGbpGaps: null,
+    topPages: []
+  };
+
+  // ---------- PASS 1 + 2: SERP scrape (top 10 + PAA + related) ----------
+  setStatus('Pass 1/6 — Pulling top 10 SERP results + People Also Ask...', 'info');
+  setProgress(8);
+
+  var serpRunId = await startActor(token, 'apify~google-search-scraper', {
+    queries: fullQuery,
+    resultsPerPage: 10,
+    maxPagesPerQuery: 1,
+    languageCode: lang,
+    countryCode: country,
+    mobileResults: false,
+    includeUnfilteredResults: false
+  });
+  var serpResults = await pollRun(token, serpRunId);
+
+  var organic = [];
+  var paaQuestions = [];
+  var related = [];
+  for (var i = 0; i < (serpResults || []).length; i++) {
+    var page = serpResults[i];
+    if (page.organicResults) {
+      for (var j = 0; j < page.organicResults.length; j++) {
+        var orgR = page.organicResults[j];
+        organic.push({ title: orgR.title || '', url: orgR.url || '', description: orgR.description || '' });
+      }
+    }
+    if (page.peopleAlsoAsk) {
+      for (var k = 0; k < page.peopleAlsoAsk.length; k++) {
+        var q = page.peopleAlsoAsk[k];
+        paaQuestions.push({ question: q.question || '', answer: q.answer || '', url: q.url || '' });
+      }
+    }
+    if (page.relatedQueries) {
+      for (var m2 = 0; m2 < page.relatedQueries.length; m2++) {
+        var rq = page.relatedQueries[m2];
+        related.push(rq.title || rq.query || '');
+      }
+    }
+  }
+  brief.topPages = organic.slice(0, 10);
+  brief.relatedSearches = related.slice(0, 15);
+
+  setProgress(20);
+
+  // ---------- PASS 3: Fetch H1/H2/FAQ text from top 10 (consensus) ----------
+  setStatus('Pass 2/6 — Reading top 10 pages to build the consensus list...', 'info');
+  var consensusTopics = {};
+  var skipDomains = ['youtube.com','facebook.com','pinterest.com','reddit.com','linkedin.com'];
+  for (var t = 0; t < Math.min(10, organic.length); t++) {
+    var pageUrl = organic[t].url;
+    if (!pageUrl) continue;
+    var shouldSkip = false;
+    for (var sd = 0; sd < skipDomains.length; sd++) {
+      if (pageUrl.indexOf(skipDomains[sd]) !== -1) { shouldSkip = true; break; }
+    }
+    if (shouldSkip) continue;
+    setProgress(20 + Math.round((t / 10) * 15));
+    try {
+      var resp = await fetch('/api/proxy?url=' + encodeURIComponent(pageUrl));
+      if (!resp.ok) continue;
+      var html = await resp.text();
+      var div = document.createElement('div');
+      div.innerHTML = html;
+      var headings = [];
+      div.querySelectorAll('h1, h2, h3').forEach(function(h) {
+        var text = (h.innerText || h.textContent || '').replace(/\s+/g, ' ').trim();
+        if (text && text.length > 4 && text.length < 200) headings.push(text);
+      });
+      organic[t].headings = headings.slice(0, 30);
+      for (var hi = 0; hi < headings.length; hi++) {
+        var topic = headings[hi].toLowerCase()
+          .replace(/[^\w\s]/g, '')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (topic.length < 6) continue;
+        consensusTopics[topic] = (consensusTopics[topic] || 0) + 1;
+      }
+    } catch(e) {
+      organic[t].fetchError = e.message;
+    }
+  }
+  var consensusList = Object.keys(consensusTopics)
+    .filter(function(k) { return consensusTopics[k] >= 2; })
+    .sort(function(a, b) { return consensusTopics[b] - consensusTopics[a]; })
+    .slice(0, 30);
+  brief.consensus = consensusList.map(function(c) {
+    return { topic: c, frequency: consensusTopics[c] };
+  });
+
+  setProgress(38);
+
+  // ---------- PASS 4: PAA gap analysis ----------
+  setStatus('Pass 3/6 — Cross-referencing People Also Ask vs top 10...', 'info');
+  var allTopHeadings = '';
+  for (var oh = 0; oh < organic.length; oh++) {
+    if (organic[oh].headings) allTopHeadings += ' ' + organic[oh].headings.join(' ');
+  }
+  allTopHeadings = allTopHeadings.toLowerCase();
+  var stopWords = ['what','where','when','which','this','that','with','from','your','have','does','will','about','they','their','should','would'];
+  for (var p = 0; p < paaQuestions.length; p++) {
+    var qText = paaQuestions[p].question;
+    if (!qText) continue;
+    var qWordsAll = qText.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/);
+    var qWords = [];
+    for (var qw = 0; qw < qWordsAll.length; qw++) {
+      var w = qWordsAll[qw];
+      if (w.length > 3 && stopWords.indexOf(w) === -1) qWords.push(w);
+    }
+    var coveredCount = 0;
+    for (var qw2 = 0; qw2 < qWords.length; qw2++) {
+      if (allTopHeadings.indexOf(qWords[qw2]) !== -1) coveredCount++;
+    }
+    var coverageRatio = qWords.length > 0 ? coveredCount / qWords.length : 1;
+    if (coverageRatio < 0.5) {
+      brief.paaGaps.push({
+        question: qText,
+        answer: paaQuestions[p].answer,
+        coverage: Math.round(coverageRatio * 100)
+      });
+    }
+  }
+
+  setProgress(45);
+
+  // ---------- PASS 5: Reddit mining ----------
+  setStatus('Pass 4/6 — Mining Reddit for real complaints and questions...', 'info');
+  var redditQueries = [
+    '"' + city + '" ' + keyword,
+    '"' + city + '" ' + keyword + ' recommend',
+    '"' + city + '" ' + keyword + ' bad'
+  ];
+  for (var rq2 = 0; rq2 < redditQueries.length; rq2++) {
+    var rUrl = 'https://www.reddit.com/search.json?q=' + encodeURIComponent(redditQueries[rq2]) + '&sort=relevance&t=year&limit=15';
+    try {
+      var rResp = await fetch('/api/proxy?url=' + encodeURIComponent(rUrl));
+      if (!rResp.ok) continue;
+      var rJson = await rResp.json();
+      var children = (rJson.data && rJson.data.children) || [];
+      for (var rc = 0; rc < children.length; rc++) {
+        var post = children[rc].data;
+        if (!post) continue;
+        var title = post.title || '';
+        var selftext = (post.selftext || '').substring(0, 400);
+        if (title.length < 10) continue;
+        var dup = false;
+        for (var df = 0; df < brief.redditFindings.length; df++) {
+          if (brief.redditFindings[df].title === title) { dup = true; break; }
+        }
+        if (dup) continue;
+        brief.redditFindings.push({
+          title: title,
+          excerpt: selftext,
+          subreddit: post.subreddit || '',
+          score: post.score || 0,
+          comments: post.num_comments || 0,
+          url: 'https://reddit.com' + (post.permalink || ''),
+          queryUsed: redditQueries[rq2]
+        });
+      }
+    } catch(e) {
+      // Reddit fail: skip and continue
+    }
+  }
+  brief.redditFindings.sort(function(a, b) { return b.score - a.score; });
+  brief.redditFindings = brief.redditFindings.slice(0, 25);
+
+  setProgress(60);
+
+  // ---------- PASS 6: Top 3 competitor GBP reviews ----------
+  setStatus('Pass 5/6 — Mining top 3 competitor reviews for vocabulary...', 'info');
+  try {
+    var compRunId = await startActor(token, 'compass~crawler-google-places', {
+      searchStringsArray: [fullQuery],
+      maxCrawledPlacesPerSearch: 3,
+      language: lang,
+      maxReviews: 30,
+      maxImages: 0,
+      reviewsSort: 'newest',
+      scrapeReviewerInfo: false
+    });
+    var compData = await pollRun(token, compRunId);
+    var allReviews = [];
+    for (var c = 0; c < (compData || []).length; c++) {
+      var comp = compData[c];
+      brief.competitorReviews.competitors.push({
+        name: comp.title || '',
+        rating: comp.totalScore || 0,
+        reviewCount: comp.reviewsCount || 0
+      });
+      var reviews = comp.reviews || [];
+      for (var rv = 0; rv < reviews.length; rv++) {
+        allReviews.push({
+          stars: reviews[rv].stars || reviews[rv].rating || 0,
+          text: reviews[rv].text || '',
+          business: comp.title || ''
+        });
+      }
+    }
+    for (var ar = 0; ar < allReviews.length; ar++) {
+      var rev = allReviews[ar];
+      var txt = (rev.text || '').trim();
+      if (!txt || txt.length < 20) continue;
+      if (rev.stars >= 5) {
+        brief.competitorReviews.loved.push({ text: txt.substring(0, 300), business: rev.business });
+      } else if (rev.stars <= 3) {
+        brief.competitorReviews.hated.push({ text: txt.substring(0, 300), business: rev.business, stars: rev.stars });
+      }
+    }
+    brief.competitorReviews.loved = brief.competitorReviews.loved.slice(0, 20);
+    brief.competitorReviews.hated = brief.competitorReviews.hated.slice(0, 20);
+  } catch(e) {
+    brief.competitorReviews.error = e.message;
+  }
+
+  setProgress(80);
+
+  // ---------- PASS 7: Client GBP audit (optional) ----------
+  if (clientGmbUrl) {
+    setStatus('Pass 6/6 — Auditing client GBP for gaps...', 'info');
+    try {
+      var clientRunId = await startActor(token, 'compass~crawler-google-places', {
+        startUrls: [{ url: clientGmbUrl }],
+        maxCrawledPlacesPerSearch: 1,
+        language: lang,
+        maxReviews: 0,
+        maxImages: 0,
+        scrapeQuestionAndAnswers: true
+      });
+      var clientData = await pollRun(token, clientRunId);
+      if (clientData && clientData.length) {
+        var c0 = clientData[0];
+        var qaList = c0.questionsAndAnswers || [];
+        var unansweredCount = 0;
+        var qaMapped = [];
+        for (var qaI = 0; qaI < qaList.length; qaI++) {
+          var qa = qaList[qaI];
+          var answered = !!(qa.answer && qa.answer.length > 5);
+          if (!answered) unansweredCount++;
+          qaMapped.push({ question: qa.question || '', answer: qa.answer || '', answered: answered });
+        }
+        brief.clientGbpGaps = {
+          name: c0.title || '',
+          primaryCategory: c0.categoryName || '',
+          allCategories: c0.categories || [],
+          questions: qaMapped,
+          unanswered: unansweredCount
+        };
+      }
+    } catch(e) {
+      brief.clientGbpGaps = { error: e.message };
+    }
+  } else {
+    setStatus('Pass 6/6 — Skipping client GBP audit (no URL)...', 'info');
+  }
+
+  setProgress(95);
+  setStatus('Building the brief...', 'success');
+  renderGapBrief(brief);
+  setProgress(100);
+
+  var btn = document.getElementById('run-btn');
+  btn.disabled = false;
+  btn.innerHTML = 'Run GAP Research';
+}
+
+function renderGapBrief(brief) {
+  document.getElementById('setup-card').classList.add('hidden');
+  document.getElementById('results-card').classList.remove('hidden');
+
+  document.getElementById('stats').innerHTML =
+    '<div class="stat"><div class="stat-num">' + brief.paaGaps.length + '</div><div class="stat-label">PAA gaps</div></div>' +
+    '<div class="stat"><div class="stat-num">' + brief.redditFindings.length + '</div><div class="stat-label">Reddit threads</div></div>' +
+    '<div class="stat"><div class="stat-num">' + (brief.competitorReviews.loved.length + brief.competitorReviews.hated.length) + '</div><div class="stat-label">Reviews mined</div></div>';
+
+  document.getElementById('result-tabs').innerHTML = '';
+
+  var html = '';
+  html += '<div style="font-weight:700;font-size:18px;margin-bottom:4px;">Content GAP Brief</div>';
+  html += '<div style="font-size:13px;color:#888;margin-bottom:20px;">' + escapeHtml(brief.keyword) + ' &middot; ' + escapeHtml(brief.city) + ' &middot; ' + new Date(brief.generated).toLocaleString() + '</div>';
+
+  // 1. DO NOT REPEAT
+  html += '<div style="margin-bottom:20px;padding:14px;background:#fef2f2;border-left:4px solid #ef4444;border-radius:8px;">';
+  html += '<div style="font-weight:700;font-size:14px;color:#991b1b;margin-bottom:8px;">DO NOT REPEAT (consensus from top 10 — Google already has this)</div>';
+  if (brief.consensus.length === 0) {
+    html += '<div style="font-size:13px;color:#666;">No strong consensus detected — most pages cover different angles.</div>';
+  } else {
+    html += '<ul style="margin-left:18px;font-size:13px;color:#444;line-height:1.7;">';
+    for (var i = 0; i < brief.consensus.length; i++) {
+      html += '<li>' + escapeHtml(brief.consensus[i].topic) + ' <span style="color:#999;font-size:11px;">(' + brief.consensus[i].frequency + '/10 pages)</span></li>';
+    }
+    html += '</ul>';
+  }
+  html += '</div>';
+
+  // 2. PAA GAPS
+  html += '<div style="margin-bottom:20px;padding:14px;background:#ecfdf5;border-left:4px solid #10b981;border-radius:8px;">';
+  html += '<div style="font-weight:700;font-size:14px;color:#065f46;margin-bottom:8px;">PAA QUESTIONS THE TOP 10 ARE NOT ANSWERING (put these in your FAQ)</div>';
+  if (brief.paaGaps.length === 0) {
+    html += '<div style="font-size:13px;color:#666;">No clear PAA gaps — top 10 covers what Google is surfacing.</div>';
+  } else {
+    for (var g = 0; g < brief.paaGaps.length; g++) {
+      html += '<div style="background:#fff;padding:10px 12px;border-radius:6px;margin-bottom:8px;border:1px solid #d1fae5;">';
+      html += '<div style="font-weight:600;font-size:13px;color:#064e3b;">Q: ' + escapeHtml(brief.paaGaps[g].question) + '</div>';
+      if (brief.paaGaps[g].answer) {
+        var ansT = brief.paaGaps[g].answer.substring(0, 250);
+        html += '<div style="font-size:12px;color:#555;margin-top:4px;line-height:1.5;">' + escapeHtml(ansT) + (brief.paaGaps[g].answer.length > 250 ? '...' : '') + '</div>';
+      }
+      html += '<div style="font-size:11px;color:#999;margin-top:4px;">Top 10 coverage: ' + brief.paaGaps[g].coverage + '%</div>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+
+  // 3. Reddit
+  html += '<div style="margin-bottom:20px;padding:14px;background:#fff7ed;border-left:4px solid #f97316;border-radius:8px;">';
+  html += '<div style="font-weight:700;font-size:14px;color:#9a3412;margin-bottom:8px;">REDDIT — what real people in ' + escapeHtml(brief.city) + ' are saying</div>';
+  if (brief.redditFindings.length === 0) {
+    html += '<div style="font-size:13px;color:#666;">No Reddit threads found for this query/city combo.</div>';
+  } else {
+    var rfLimit = Math.min(brief.redditFindings.length, 15);
+    for (var r2 = 0; r2 < rfLimit; r2++) {
+      var rf = brief.redditFindings[r2];
+      html += '<div style="background:#fff;padding:10px 12px;border-radius:6px;margin-bottom:8px;border:1px solid #fed7aa;">';
+      html += '<div style="font-weight:600;font-size:13px;color:#7c2d12;">' + escapeHtml(rf.title) + '</div>';
+      if (rf.excerpt) {
+        var exT = rf.excerpt.substring(0, 250);
+        html += '<div style="font-size:12px;color:#555;margin-top:4px;line-height:1.5;">' + escapeHtml(exT) + (rf.excerpt.length > 250 ? '...' : '') + '</div>';
+      }
+      html += '<div style="font-size:11px;color:#999;margin-top:4px;">r/' + escapeHtml(rf.subreddit) + ' &middot; up ' + rf.score + ' &middot; ' + rf.comments + ' comments &middot; <a href="' + escapeHtml(rf.url) + '" target="_blank" style="color:#ea580c;">open thread</a></div>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+
+  // 4. Competitor reviews
+  html += '<div style="margin-bottom:20px;padding:14px;background:#eef2ff;border-left:4px solid #6366f1;border-radius:8px;">';
+  html += '<div style="font-weight:700;font-size:14px;color:#3730a3;margin-bottom:8px;">EMOTIONAL VOCABULARY (from top 3 competitor reviews)</div>';
+  if (brief.competitorReviews.competitors.length > 0) {
+    html += '<div style="font-size:12px;color:#555;margin-bottom:10px;">Competitors mined: ';
+    var compNames = [];
+    for (var cn = 0; cn < brief.competitorReviews.competitors.length; cn++) {
+      var cc = brief.competitorReviews.competitors[cn];
+      compNames.push(escapeHtml(cc.name) + ' (' + (cc.rating || '?') + ' stars)');
+    }
+    html += compNames.join(', ');
+    html += '</div>';
+  }
+  if (brief.competitorReviews.loved.length > 0) {
+    html += '<div style="font-weight:600;font-size:13px;color:#065f46;margin-top:8px;margin-bottom:6px;">What customers LOVED:</div>';
+    var lvLimit = Math.min(brief.competitorReviews.loved.length, 8);
+    for (var lv = 0; lv < lvLimit; lv++) {
+      html += '<div style="font-size:12px;color:#444;padding:6px 10px;background:#fff;border-radius:4px;margin-bottom:4px;border-left:3px solid #10b981;">';
+      html += '"' + escapeHtml(brief.competitorReviews.loved[lv].text) + '" <span style="color:#999;">- ' + escapeHtml(brief.competitorReviews.loved[lv].business) + '</span>';
+      html += '</div>';
+    }
+  }
+  if (brief.competitorReviews.hated.length > 0) {
+    html += '<div style="font-weight:600;font-size:13px;color:#991b1b;margin-top:10px;margin-bottom:6px;">What customers HATED (your differentiation opportunity):</div>';
+    var htLimit = Math.min(brief.competitorReviews.hated.length, 8);
+    for (var ht = 0; ht < htLimit; ht++) {
+      html += '<div style="font-size:12px;color:#444;padding:6px 10px;background:#fff;border-radius:4px;margin-bottom:4px;border-left:3px solid #ef4444;">';
+      html += '"' + escapeHtml(brief.competitorReviews.hated[ht].text) + '" <span style="color:#999;">- ' + escapeHtml(brief.competitorReviews.hated[ht].business) + ' (' + brief.competitorReviews.hated[ht].stars + ' stars)</span>';
+      html += '</div>';
+    }
+  }
+  html += '</div>';
+
+  // 5. Related searches
+  if (brief.relatedSearches.length > 0) {
+    html += '<div style="margin-bottom:20px;padding:14px;background:#fafafa;border-left:4px solid #6b7280;border-radius:8px;">';
+    html += '<div style="font-weight:700;font-size:14px;color:#374151;margin-bottom:8px;">RELATED SEARCHES (consider as supplementary pages)</div>';
+    html += '<div style="font-size:13px;color:#555;line-height:1.8;">';
+    var relTags = [];
+    for (var rs = 0; rs < brief.relatedSearches.length; rs++) {
+      relTags.push('<span style="display:inline-block;background:#fff;padding:3px 10px;border-radius:12px;border:1px solid #e5e7eb;margin-right:4px;margin-bottom:4px;">' + escapeHtml(brief.relatedSearches[rs]) + '</span>');
+    }
+    html += relTags.join(' ');
+    html += '</div></div>';
+  }
+
+  // 6. Client GBP gaps
+  if (brief.clientGbpGaps && !brief.clientGbpGaps.error) {
+    html += '<div style="margin-bottom:20px;padding:14px;background:#f0f9ff;border-left:4px solid #0ea5e9;border-radius:8px;">';
+    html += '<div style="font-weight:700;font-size:14px;color:#075985;margin-bottom:8px;">CLIENT GBP GAPS - ' + escapeHtml(brief.clientGbpGaps.name) + '</div>';
+    html += '<div style="font-size:13px;color:#444;line-height:1.7;">';
+    html += '<div><strong>Primary category:</strong> ' + escapeHtml(brief.clientGbpGaps.primaryCategory || '-') + '</div>';
+    if (brief.clientGbpGaps.allCategories && brief.clientGbpGaps.allCategories.length > 0) {
+      var catEsc = [];
+      for (var ce = 0; ce < brief.clientGbpGaps.allCategories.length; ce++) {
+        catEsc.push(escapeHtml(brief.clientGbpGaps.allCategories[ce]));
+      }
+      html += '<div><strong>All categories:</strong> ' + catEsc.join(', ') + '</div>';
+    }
+    html += '<div style="margin-top:6px;"><strong>Q&amp;A questions:</strong> ' + brief.clientGbpGaps.questions.length + ' total, <span style="color:#dc2626;">' + brief.clientGbpGaps.unanswered + ' unanswered</span></div>';
+    if (brief.clientGbpGaps.unanswered > 0) {
+      html += '<div style="margin-top:6px;font-size:12px;color:#666;"><strong>Unanswered questions (answer these on the website!):</strong></div>';
+      for (var u = 0; u < brief.clientGbpGaps.questions.length; u++) {
+        if (brief.clientGbpGaps.questions[u].answered) continue;
+        html += '<div style="font-size:12px;color:#444;padding:4px 8px;background:#fff;border-radius:4px;margin-top:4px;">Q: ' + escapeHtml(brief.clientGbpGaps.questions[u].question) + '</div>';
+      }
+    }
+    html += '</div></div>';
+  }
+
+  // 7. Brief markdown
+  html += '<div style="margin-bottom:20px;padding:14px;background:#1a1a1a;color:#fff;border-radius:8px;font-family:ui-monospace,SFMono-Regular,monospace;font-size:12px;line-height:1.6;">';
+  html += '<div style="font-weight:700;font-size:13px;margin-bottom:8px;color:#f0fdf4;">BRIEF SUMMARY (copy into your Claude Code / writing prompt)</div>';
+  html += '<pre style="white-space:pre-wrap;margin:0;color:#e5e7eb;">' + escapeHtml(buildBriefMarkdown(brief)) + '</pre>';
+  html += '</div>';
+
+  document.getElementById('pane-posts').innerHTML = html;
+  document.getElementById('pane-posts').classList.remove('hidden');
+  ['pane-overview','pane-reviews','pane-photos','pane-captions','pane-fbposts','pane-webresearch'].forEach(function(p) {
+    var el = document.getElementById(p);
+    if (el) el.classList.add('hidden');
+  });
+
+  // Downloads
+  var dl = document.getElementById('dl-btns');
+  dl.innerHTML = '';
+  var mdBtn = document.createElement('button');
+  mdBtn.className = 'btn btn-outline';
+  mdBtn.innerHTML = 'Download brief (.md)';
+  mdBtn.onclick = function() {
+    var md = buildBriefMarkdown(brief);
+    var blob = new Blob([md], { type: 'text/markdown' });
+    triggerDownload(blob, 'gap-brief-' + slugify(brief.keyword) + '-' + slugify(brief.city) + '.md');
+  };
+  dl.appendChild(mdBtn);
+
+  var jsonBtn = document.createElement('button');
+  jsonBtn.className = 'btn btn-outline';
+  jsonBtn.innerHTML = 'Download data (.json)';
+  jsonBtn.onclick = function() {
+    var blob = new Blob([JSON.stringify(brief, null, 2)], { type: 'application/json' });
+    triggerDownload(blob, 'gap-brief-' + slugify(brief.keyword) + '-' + slugify(brief.city) + '.json');
+  };
+  dl.appendChild(jsonBtn);
+
+  var copyBtn = document.createElement('button');
+  copyBtn.className = 'btn btn-outline';
+  copyBtn.innerHTML = 'Copy brief';
+  copyBtn.onclick = function() {
+    navigator.clipboard.writeText(buildBriefMarkdown(brief)).then(function() {
+      copyBtn.innerHTML = 'Copied!';
+      setTimeout(function() { copyBtn.innerHTML = 'Copy brief'; }, 2000);
+    });
+  };
+  dl.appendChild(copyBtn);
+}
+
+function buildBriefMarkdown(brief) {
+  var lines = [];
+  lines.push('# Content GAP Brief - ' + brief.keyword + ' / ' + brief.city);
+  lines.push('');
+  lines.push('Generated: ' + new Date(brief.generated).toLocaleString());
+  lines.push('Query used: "' + brief.query + '"');
+  lines.push('Locale: ' + brief.country + ' / ' + brief.language);
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  lines.push('## DO NOT REPEAT - Consensus from top 10');
+  lines.push('Google already has these covered. Mentioning them adds nothing.');
+  lines.push('');
+  if (brief.consensus.length === 0) {
+    lines.push('_No strong consensus detected._');
+  } else {
+    for (var i = 0; i < brief.consensus.length; i++) {
+      lines.push('- ' + brief.consensus[i].topic + ' _(on ' + brief.consensus[i].frequency + '/10 pages)_');
+    }
+  }
+  lines.push('');
+  lines.push('## PAA Questions NOT Answered by Top 10');
+  lines.push('Put these in the FAQ. Google is literally telling you these are unanswered.');
+  lines.push('');
+  if (brief.paaGaps.length === 0) {
+    lines.push('_No clear PAA gaps._');
+  } else {
+    for (var p = 0; p < brief.paaGaps.length; p++) {
+      lines.push('- **' + brief.paaGaps[p].question + '**');
+      if (brief.paaGaps[p].answer) {
+        lines.push('  - Reference answer: ' + brief.paaGaps[p].answer.substring(0, 300));
+      }
+    }
+  }
+  lines.push('');
+  lines.push('## Reddit - Real Voice of Customer');
+  lines.push('Threads from people in ' + brief.city + ' discussing ' + brief.keyword + '.');
+  lines.push('');
+  if (brief.redditFindings.length === 0) {
+    lines.push('_No Reddit threads found._');
+  } else {
+    for (var rd = 0; rd < brief.redditFindings.length; rd++) {
+      var rf = brief.redditFindings[rd];
+      lines.push('- **' + rf.title + '** _(r/' + rf.subreddit + ', up ' + rf.score + ', ' + rf.comments + ' comments)_');
+      if (rf.excerpt) lines.push('  - ' + rf.excerpt.substring(0, 300).replace(/\n+/g, ' '));
+      lines.push('  - ' + rf.url);
+    }
+  }
+  lines.push('');
+  lines.push('## Competitor Review Vocabulary');
+  if (brief.competitorReviews.competitors.length > 0) {
+    var mined = [];
+    for (var ce = 0; ce < brief.competitorReviews.competitors.length; ce++) {
+      var c = brief.competitorReviews.competitors[ce];
+      mined.push(c.name + ' (' + (c.rating || '?') + ' stars)');
+    }
+    lines.push('Mined from: ' + mined.join(', '));
+  }
+  lines.push('');
+  lines.push('### What customers LOVED');
+  for (var lv = 0; lv < brief.competitorReviews.loved.length; lv++) {
+    lines.push('- "' + brief.competitorReviews.loved[lv].text + '" - ' + brief.competitorReviews.loved[lv].business);
+  }
+  lines.push('');
+  lines.push('### What customers HATED (your opportunity)');
+  for (var ht = 0; ht < brief.competitorReviews.hated.length; ht++) {
+    lines.push('- "' + brief.competitorReviews.hated[ht].text + '" - ' + brief.competitorReviews.hated[ht].business + ' (' + brief.competitorReviews.hated[ht].stars + ' stars)');
+  }
+  lines.push('');
+  if (brief.relatedSearches.length > 0) {
+    lines.push('## Related Searches');
+    for (var rs = 0; rs < brief.relatedSearches.length; rs++) {
+      lines.push('- ' + brief.relatedSearches[rs]);
+    }
+    lines.push('');
+  }
+  if (brief.clientGbpGaps && !brief.clientGbpGaps.error) {
+    lines.push('## Client GBP Gaps - ' + brief.clientGbpGaps.name);
+    lines.push('- Primary category: ' + (brief.clientGbpGaps.primaryCategory || '-'));
+    if (brief.clientGbpGaps.allCategories.length > 0) {
+      lines.push('- All categories: ' + brief.clientGbpGaps.allCategories.join(', '));
+    }
+    lines.push('- Q&A: ' + brief.clientGbpGaps.questions.length + ' total, ' + brief.clientGbpGaps.unanswered + ' UNANSWERED');
+    for (var u = 0; u < brief.clientGbpGaps.questions.length; u++) {
+      if (brief.clientGbpGaps.questions[u].answered) continue;
+      lines.push('  - Q: ' + brief.clientGbpGaps.questions[u].question);
+    }
+    lines.push('');
+  }
+  lines.push('## Top 10 ranking pages (for reference)');
+  for (var tp = 0; tp < brief.topPages.length; tp++) {
+    lines.push((tp + 1) + '. [' + brief.topPages[tp].title + '](' + brief.topPages[tp].url + ')');
+  }
+  lines.push('');
+  lines.push('---');
+  lines.push('');
+  lines.push('## Instructions for the writer (or AI)');
+  lines.push('1. DO NOT cover the consensus topics - Google already has them.');
+  lines.push('2. Answer the PAA gap questions explicitly in the FAQ section.');
+  lines.push('3. Use the emotional vocabulary from the LOVED reviews - that is how real customers talk.');
+  lines.push('4. Address the HATED complaints as your differentiation points.');
+  lines.push('5. Pull in the Reddit findings as case studies, local context, or trust signals.');
+  lines.push('6. Answer the unanswered GBP Q&A questions on the relevant service pages.');
+  return lines.join('\n');
+}
+
+function escapeHtml(s) {
+  if (s === null || s === undefined) return '';
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function slugify(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').substring(0, 40);
+}
+
 </script>
 </body>
 </html>
